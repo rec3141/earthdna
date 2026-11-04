@@ -1,10 +1,11 @@
-# SEDNA
+# EarthDNA
 
-Spherical Exploration of Diversity using Nucleic Acid sequences: every SSU rRNA sequence on one navigable globe,
+Every SSU rRNA sequence on one navigable globe,
 from domains as continents down to species, with amplicon sequence variants (ASVs) placed on the same map.
 
-This branch rebuilds SEDNA on [fastsne](https://github.com/rec3141/fastsne): GPU t-SNE run directly on a sphere.
-The 2016 version (R `smacofSphere` MDS of the SILVA 97% seed, Cesium globe) is kept under `legacy/`.
+EarthDNA is built on [fastsne](https://github.com/rec3141/fastsne): GPU t-SNE run directly on a sphere. It grew out of
+SEDNA (Spherical Exploration of Diversity using Nucleic Acid sequences, 2016: R `smacofSphere` MDS of the SILVA 97%
+seed on a Cesium globe), which is kept under `legacy/`.
 
 ## How the globe is made
 

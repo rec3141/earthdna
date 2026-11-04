@@ -60,7 +60,7 @@ with open(a.out, "w") as out:
     for name, aln in records():
         cols, up = bases(aln)
         if len(cols) == 0 or cols[0] > c0 or cols[-1] < c1: continue
-        reg = "".join(ch for ch in up[c0:c1 + 1] if ch.isalpha())
+        reg = up[c0:c1 + 1].replace("-", "").replace(".", "")
         if len(reg) < a.min_len: continue
         out.write(f">{name}\n{reg}\n"); kept += 1; lens.append(len(reg))
 print(f"{kept} references span the region, median length {int(np.median(lens))}")
