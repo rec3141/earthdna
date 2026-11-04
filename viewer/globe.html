@@ -634,8 +634,10 @@ async function load() {
   grp = new Uint8Array(ab, 4 * N, N);
   const tb = atob((await tres.text()).trim()), tx = new Uint8Array(tb.length);
   for (let i = 0; i < tb.length; i++) tx[i] = tb.charCodeAt(i);
-  if (tx.length !== 6 * N) throw new Error("taxonomy file has the wrong size");
-  gen = new Uint16Array(tx.buffer, 0, N); lin = new Uint16Array(tx.buffer, 2 * N, N); spc = new Uint16Array(tx.buffer, 4 * N, N);
+  const sb = meta.speciesBytes || 2;  // species codes are uint32 when a release has more than 65534 species
+  if (tx.length !== (4 + sb) * N) throw new Error("taxonomy file has the wrong size");
+  gen = new Uint16Array(tx.buffer, 0, N); lin = new Uint16Array(tx.buffer, 2 * N, N);
+  spc = sb === 4 ? new Uint32Array(tx.buffer, 4 * N, N) : new Uint16Array(tx.buffer, 4 * N, N);
   sel = new Uint8Array(N);
   const ng = meta.groups.length;
   cols = new Float32Array(128 * 3);
