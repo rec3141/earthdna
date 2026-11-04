@@ -1,0 +1,6 @@
+work/
+*.fsb
+*.model
+*.knn
+*.b64.txt
+__pycache__/
