@@ -7,6 +7,8 @@ artifact hosts and some static hosts refuse binary types):
   tax.b64.txt       genus, lineage, species codes (uint16; 65535 = none), base64
   layout_NAME.b64.txt  further layouts: lon, lat
   flags.b64.txt     conflict flag (uint8) + neighbours' majority group (uint8; 255 = none), base64
+  ranks.b64.txt     phylum, class, order, family codes (uint16 each; 65535 = none), base64, for drilling down
+                    rank by rank (domain comes from the group, genus and species from tax.b64.txt)
 
 Rows are shuffled once (fixed seed) so points draw in random order.
 
@@ -26,7 +28,7 @@ os.makedirs(a.outdir, exist_ok=True)
 rows = [l.rstrip("\n").split("\t") for l in open(a.tax)][1:]
 N = len(rows)
 perm = np.random.default_rng(3).permutation(N)
-C = dict(dom=1, group=2, genus=7, species=8, lrank=9, lineage=10)
+C = dict(dom=1, group=2, phylum=3, **{"class": 4}, order=5, family=6, genus=7, species=8, lrank=9, lineage=10)
 
 def codes(values, limit=65535):
     c = collections.Counter(v for v in values if v)
@@ -39,6 +41,11 @@ groups, gcount, gi = codes([r[C["dom"]] + " · " + (r[C["group"]] or "?") for r 
 genera, _, ge = codes([r[C["genus"]] for r in rows])
 lineages, _, li = codes([r[C["lrank"]][:1] + r[C["lineage"]] if r[C["lineage"]] else "" for r in rows])
 species, _, sp = codes([r[C["species"]] for r in rows])
+RANKS = ["phylum", "class", "order", "family"]
+rank_names, rank_codes = {}, []
+for rk in RANKS:
+    rank_names[rk], _, c = codes([r[C[rk]] for r in rows])
+    rank_codes.append(c)
 b64 = lambda *arrs: base64.b64encode(b"".join(np.ascontiguousarray(x).tobytes() for x in arrs)).decode()
 
 def lonlat(path):
@@ -62,6 +69,7 @@ for k, spec in enumerate(a.layout):
         open(os.path.join(a.outdir, f"layout_{name}.b64.txt"), "w").write(b64(lo, la))
     layouts.append(name)
 open(os.path.join(a.outdir, "tax.b64.txt"), "w").write(b64(*(x[perm].astype("<u2") for x in (ge, li, sp))))
+open(os.path.join(a.outdir, "ranks.b64.txt"), "w").write(b64(*(x[perm].astype("<u2") for x in rank_codes)))
 if a.flags:
     fr = {l.split("\t")[0]: l.rstrip("\n").split("\t") for l in list(open(a.flags))[1:]}
     gix = {g: i for i, g in enumerate(groups)}
@@ -70,6 +78,6 @@ if a.flags:
     open(os.path.join(a.outdir, "flags.b64.txt"), "w").write(b64(flag[perm], maj[perm]))
 json.dump(dict(n=N, title=a.title, layouts=layouts, flags=bool(a.flags), groups=groups, groupCounts=gcount,
                genera=genera, lineages=[x[1:] for x in lineages], lineageRank="".join(x[0] for x in lineages),
-               species=species),
+               species=species, ranks=dict(levels=["domain"] + RANKS + ["genus", "species"], names=rank_names)),
           open(os.path.join(a.outdir, "globe.json"), "w"), separators=(",", ":"))
 print(f"{N} points, {len(groups)} groups, {len(genera)} genera, {len(species)} species -> {a.outdir}")
