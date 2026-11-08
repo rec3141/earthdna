@@ -5,7 +5,7 @@ Each table goes through fastsne's own preprocessing (optional sqrt, centre, PCA 
 Euclidean k-NN. Prints, per table, the mean fraction of the k neighbours that share the query's
 domain / phylum / class / order / family / genus (queries with an empty label at that rank are skipped).
 
-usage: knn_eval.py OUT.tax.tsv a.fsb[:sqrt] b.fsb ... [--k 15 --pca 128]
+usage: knn_eval.py OUT.tax.tsv a.fsb[:sqrt|:z] b.fsb ... [--k 15 --pca 128]
 """
 import argparse, struct
 import numpy as np
@@ -33,6 +33,7 @@ for spec in a.tables:
     X = X[sel].astype(np.float64)
     lab = [taxid[ids[i]] for i in sel]
     if tr == "sqrt": X = np.sqrt(X)
+    if tr == "z": X = (X - X.mean(0)) / (X.std(0) + 1e-9)   # standardise channels (LM activations)
     X -= X.mean(0)
     if a.pca and a.pca < X.shape[1]:
         _, _, Vt = np.linalg.svd(X[np.random.default_rng(0).choice(len(X), min(len(X), 50000), False)],
