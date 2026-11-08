@@ -32,6 +32,7 @@ ap.add_argument("--start", type=int, default=0, help="first chunk of this shard"
 ap.add_argument("--end", type=int, default=None, help="one past the last chunk of this shard")
 ap.add_argument("--check", type=int, default=0, help="compare N batched vectors with unbatched ones")
 ap.add_argument("--assemble", action="store_true", help="join finished parts into the .fsb files and exit")
+ap.add_argument("--no-fp8", action="store_true", help="bf16 input projections instead of FP8 (7B only; for GPUs below\n               compute capability 8.9 such as the A30; embeddings differ slightly from FP8 runs)")
 a = ap.parse_args()
 layers, pools = a.layers.split(","), a.pools.split(",")
 combos = [(l, p) for l in layers for p in pools]
@@ -67,6 +68,9 @@ if a.assemble:
 
 import torch
 from evo2 import Evo2
+if a.no_fp8:
+    import evo2.models
+    evo2.models.HAS_TE = False   # evo2's own fallback: a 7B without Transformer Engine runs bf16 projections
 model = Evo2(a.model_name, local_path=a.local_path, use_kernels=True)
 dev = "cuda:0"
 comp = str.maketrans("ACGTRYKMBVDHN", "TGCAYRMKVBHDN")
