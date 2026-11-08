@@ -11,7 +11,7 @@ genome's lowest-CRC32 fragment, cut to its central --len bp (windows with more t
 
 usage: models_set.py GENOMES.tsv REF.fasta.gz OUT [--len 4000]
 """
-import argparse, gzip, zlib
+import argparse, gzip, re, zlib
 import pandas as pd
 
 ap = argparse.ArgumentParser()
@@ -20,7 +20,7 @@ a = ap.parse_args()
 crc = lambda s: zlib.crc32(s.encode())
 
 g = pd.read_csv(a.genomes, sep="\t")
-acc_of = lambda fid: fid.rsplit("_", 2)[0]
+acc_of = lambda fid: re.match(r"GC[AF]_\d+\.\d+", fid).group(0)   # contig names can hold "_" (NZ_...)
 # genome -> its lowest-hash fragment id (one pass over the FASTA ids)
 best = {}
 with gzip.open(a.fasta, "rt") as f:
