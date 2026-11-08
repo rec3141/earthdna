@@ -27,6 +27,7 @@ ap.add_argument("tax"); ap.add_argument("outdir")
 ap.add_argument("--layout", action="append", required=True)
 ap.add_argument("--flags"); ap.add_argument("--title", default="")
 ap.add_argument("--traits")
+ap.add_argument("--models", help="models globe: KEY=label;... (layouts named <shape>[-KEY]; the first KEY is empty), e.g. \"=Evo 2 7B;kmer=5-mers\"")
 a = ap.parse_args()
 os.makedirs(a.outdir, exist_ok=True)
 
@@ -95,7 +96,8 @@ if a.traits:
     tr = np.array([bits.get(r[kc], 0) for r in rows], np.uint8)
     open(os.path.join(a.outdir, "traits.b64.txt"), "w").write(b64(tr[perm]))
     print("traits: " + ", ".join(f"{n} {int((tr >> k & 1).sum())}" for k, n in enumerate(trait_names)))
-json.dump(dict(n=N, title=a.title, layouts=layouts, flags=bool(a.flags), traits=trait_names, groups=groups, groupCounts=gcount,
+extra = dict(models=[dict(key=k, label=v) for k, v in (m.split("=", 1) for m in a.models.split(";"))]) if a.models else {}
+json.dump(dict(**extra, n=N, title=a.title, layouts=layouts, flags=bool(a.flags), traits=trait_names, groups=groups, groupCounts=gcount,
                genera=genera, lineages=[x[1:] for x in lineages], lineageRank="".join(x[0] for x in lineages),
                species=species, speciesBytes=species_bytes, ranks=dict(levels=["domain"] + RANKS + ["genus", "species"], names=rank_names)),
           open(os.path.join(a.outdir, "globe.json"), "w"), separators=(",", ":"))
