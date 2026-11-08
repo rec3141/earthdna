@@ -17,6 +17,7 @@ ap.add_argument("globe"); ap.add_argument("out")
 ap.add_argument("--layout", default="sculpt"); ap.add_argument("--lon", type=float)
 ap.add_argument("--lat", type=float); ap.add_argument("--size", type=int, default=640)
 ap.add_argument("--ss", type=int, default=2, help="supersampling factor")
+ap.add_argument("--radius", type=float, default=1, help="point radius in output pixels (raise for sparse globes)")
 a = ap.parse_args()
 
 def load(name):
@@ -64,7 +65,7 @@ yy, xx = np.mgrid[0:S, 0:S]
 rr = np.hypot(xx - S / 2, yy - S / 2) / R
 ocean = rr < 1
 img[ocean] = (np.array([9, 22, 48]) / 255) * (0.55 + 0.45 * np.sqrt(np.clip(1 - rr[ocean] ** 2, 0, 1)))[:, None]
-r = max(1, a.ss)                                                   # point radius in supersampled pixels
+r = max(1, round(a.radius * a.ss))                                  # point radius in supersampled pixels
 for dx in range(-r + 1, r):
     for dy in range(-r + 1, r):
         if dx * dx + dy * dy >= r * r: continue
