@@ -43,6 +43,7 @@ FASTSNE=/path/to/fastsne pipeline/build.sh $SILVA work 144
 | `pipeline/gtdb_traits.py` | GTDB metadata -> per-genome traits (cultured, named, type material) for `pack_globe.py --traits` |
 | `pipeline/gtdb_read_refs.py` | reference fragments cut to read length, fixed at their parents' positions (read models) |
 | `pipeline/render_preview.py` | a still image of a packed globe |
+| `pipeline/pack_overlay.py` | placed reads (fastsne `--project`, per layout) -> an overlay the viewer draws on top |
 | `pipeline/embed_evo2.py` | any fasta -> Evo 2 layer embeddings as `.fsb` (with `embed_evo2*_grex.sbatch`) |
 | `pipeline/knn_eval.py` | feature tables -> how often nearest neighbours share each rank's label |
 | `pipeline/pilot_sample.py`, `pilot_reads.py` | genus-stratified SSU / labelled nanopore-read sets for comparing features |
