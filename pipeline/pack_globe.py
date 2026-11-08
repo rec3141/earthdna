@@ -10,11 +10,14 @@ artifact hosts and some static hosts refuse binary types):
   flags.b64.txt     conflict flag (uint8) + neighbours' majority group (uint8; 255 = none), base64
   ranks.b64.txt     phylum, class, order, family codes (uint16 each; 65535 = none), base64, for drilling down
                     rank by rank (domain comes from the group, genus and species from tax.b64.txt)
+  traits.b64.txt    with --traits: one byte per point, bit k set when trait k applies (globe.json traits names them)
 
 Rows are shuffled once (fixed seed) so points draw in random order.
 
 usage: pack_globe.py OUT.tax.tsv OUTDIR --layout similarity=map.tsv [--layout sculpt=map2.tsv] [--flags conflicts.tsv]
-                     [--title "SILVA 144 SSU Ref NR99"]
+                     [--traits traits.tsv] [--title "SILVA 144 SSU Ref NR99"]
+  traits.tsv: a header naming a column of OUT.tax.tsv (e.g. organism) and up to 8 traits, then one row per key with
+  0/1 per trait (gtdb_traits.py writes one from GTDB's metadata); points whose key is missing get no traits
 """
 import argparse, base64, collections, json, os
 import numpy as np
@@ -23,10 +26,12 @@ ap = argparse.ArgumentParser()
 ap.add_argument("tax"); ap.add_argument("outdir")
 ap.add_argument("--layout", action="append", required=True)
 ap.add_argument("--flags"); ap.add_argument("--title", default="")
+ap.add_argument("--traits")
 a = ap.parse_args()
 os.makedirs(a.outdir, exist_ok=True)
 
-rows = [l.rstrip("\n").split("\t") for l in open(a.tax)][1:]
+lines = [l.rstrip("\n").split("\t") for l in open(a.tax)]
+header, rows = lines[0], lines[1:]
 N = len(rows)
 perm = np.random.default_rng(3).permutation(N)
 C = dict(dom=1, group=2, phylum=3, **{"class": 4}, order=5, family=6, genus=7, species=8, lrank=9, lineage=10)
@@ -80,7 +85,17 @@ if a.flags:
     flag = np.array([int(fr[r[0]][1]) for r in rows], np.uint8)
     maj = np.array([gix.get(fr[r[0]][2] + " · " + fr[r[0]][3], 255) if int(fr[r[0]][1]) else 255 for r in rows], np.uint8)
     open(os.path.join(a.outdir, "flags.b64.txt"), "w").write(b64(flag[perm], maj[perm]))
-json.dump(dict(n=N, title=a.title, layouts=layouts, flags=bool(a.flags), groups=groups, groupCounts=gcount,
+trait_names = []
+if a.traits:
+    tl = [l.rstrip("\n").split("\t") for l in open(a.traits)]
+    key, trait_names = tl[0][0], tl[0][1:]
+    assert len(trait_names) <= 8, "at most 8 traits fit in a byte"
+    kc = header.index(key)
+    bits = {r[0]: sum(1 << k for k, v in enumerate(r[1:]) if v == "1") for r in tl[1:]}
+    tr = np.array([bits.get(r[kc], 0) for r in rows], np.uint8)
+    open(os.path.join(a.outdir, "traits.b64.txt"), "w").write(b64(tr[perm]))
+    print("traits: " + ", ".join(f"{n} {int((tr >> k & 1).sum())}" for k, n in enumerate(trait_names)))
+json.dump(dict(n=N, title=a.title, layouts=layouts, flags=bool(a.flags), traits=trait_names, groups=groups, groupCounts=gcount,
                genera=genera, lineages=[x[1:] for x in lineages], lineageRank="".join(x[0] for x in lineages),
                species=species, speciesBytes=species_bytes, ranks=dict(levels=["domain"] + RANKS + ["genus", "species"], names=rank_names)),
           open(os.path.join(a.outdir, "globe.json"), "w"), separators=(",", ":"))
