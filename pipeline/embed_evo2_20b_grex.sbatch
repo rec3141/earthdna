@@ -13,8 +13,8 @@
 # Resumable like embed_evo2_grex.sbatch; joins the parts when all chunks are done.
 # usage: sbatch embed_evo2_20b_grex.sbatch WORK_DIR in.fasta OUT_PREFIX [embed_evo2.py options...]
 #   default layers: blocks 12, 16, 18, 21 of 24 (0.5, 0.67, 0.75, 0.875 of depth); override with --layers
-# WARNING: the 20B split over two GPUs returns NaN for most sequences (seen on Grex L40S, 2026-11-08). Run it one per
-# GPU instead: MODEL=evo2_20b sbatch -p lgpu --gpus=l40s:2 embed_evo2_grex.sbatch ... --tokens 4096
+# The 20B split over two GPUs returned NaN: vortex's Triton kernels, which embed_evo2.py now disables on more than one
+# GPU. One per GPU is still faster: MODEL=evo2_20b sbatch -p lgpu --gpus=l40s:2 embed_evo2_grex.sbatch ... --tokens 4096
 set -euo pipefail
 work=$1; fasta=$2; out=$3; shift 3
 type module >/dev/null 2>&1 || { set +u; source /etc/profile; set -u; }  # sbatch from a non-login shell
