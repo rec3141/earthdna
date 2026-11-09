@@ -39,9 +39,9 @@ dev = next(model.model.parameters()).device
 def tail_logprob(prefix, target):
     """sum log p(target[1:] | prefix + target[:i]) for i = 1..len-1"""
     ids = torch.tensor(model.tokenizer.tokenize(prefix + target), dtype=torch.int).unsqueeze(0).to(dev)
-    logits, _ = model(ids)
+    logits, _ = model.model.forward(ids)            # as evo2's own test does; logits sit on the last GPU
     lp = torch.log_softmax(logits[0, :-1].float(), -1)
-    nxt = ids[0, 1:].long()
+    nxt = ids[0, 1:].long().to(lp.device)
     tok = lp.gather(1, nxt.unsqueeze(1)).squeeze(1)
     return float(tok[len(prefix):].sum())   # tok[i] predicts token i+1: target[1:] is predicted from index len(prefix)
 
