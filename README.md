@@ -94,3 +94,7 @@ with the reverse strand) as `.fsb` tables, batching by length; `embed_evo2_grex.
 genus-stratified sets. On 8,570 labelled 3-5 kb nanopore reads, 7B layer 24 (second half, both strands, channels
 z-scored) put a read's 15 nearest neighbours in its order 66% of the time against 42% for canonical 5-mers, and in its
 genus 21% against 15%; layer 28 was far worse than 5-mers.
+
+**[docs/dna_models.md](docs/dna_models.md)** compares every model tried (5-mers, DNABERT-2, DNABERT-S, Evo 2 7B / 20B /
+40B, and a 10-d phylogeny subspace): benchmarks, strengths, weaknesses, hardware and the pitfalls hit along the way.
+`docs/nvidia_evo2_api.md` covers NVIDIA's hosted Evo 2 endpoints.
