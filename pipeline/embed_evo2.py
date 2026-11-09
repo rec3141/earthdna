@@ -86,16 +86,33 @@ def embed(batch):
     x = torch.full((len(batch), L), ord("N"), dtype=torch.int)
     for i, s in enumerate(batch):
         x[i, :len(s)] = torch.tensor(model.tokenizer.tokenize(s), dtype=torch.int)
-    _, emb = model(x.to(dev), return_embeddings=True, layer_names=layers)
+    # our own hooks, copying each output as it is produced: evo2's return_embeddings keeps a bare reference, and on a
+    # model split over two GPUs the layers past the first GPU came back as all zeros (40B, 2026-11-09)
+    emb, handles = {}, []
+    def keep(name):
+        def hook(_, __, out): emb[name] = (out[0] if isinstance(out, tuple) else out).detach().float().clone()
+        return hook
+    for l in layers: handles.append(model.model.get_submodule(l).register_forward_hook(keep(l)))
+    try: model.model.forward(x.to(dev))
+    finally:
+        for hd in handles: hd.remove()
     n = torch.tensor([len(s) for s in batch], device=dev)
     pos = torch.arange(L, device=dev)[None, :]
     w = {"mean": (pos < n[:, None]), "tail": (pos < n[:, None]) & (pos >= (n // 2)[:, None])}
+    # "...n" pools (meann, tailn) scale every position to unit length first: in the 40B the residual stream jumps to
+    # ~1e16 at block 23 and only its direction carries information from there on
+    w.update({k + "n": v for k, v in list(w.items())})
     out = {}
     for l in layers:
-        h = emb[l].float()          # a model split over GPUs returns each layer on its own device
+        h = emb[l]                  # a model split over GPUs returns each layer on its own device
+        hn = None
         for p in pools:
             m = w[p].to(h.device).float()[..., None]
-            out[l, p] = ((h * m).sum(1) / m.sum(1)).cpu().numpy()
+            if p.endswith("n"):
+                if hn is None: hn = h / h.norm(dim=-1, keepdim=True).clamp_min(1e-30)
+                x = hn
+            else: x = h
+            out[l, p] = ((x * m).sum(1) / m.sum(1)).cpu().numpy()
     return out
 
 def safe_embed(batch):
@@ -149,7 +166,7 @@ t0, done = time.time(), 0
 for c in todo:
     chunk = seqs[c * a.chunk:(c + 1) * a.chunk]
     res = run(chunk)
-    np.savez(part(c) + ".tmp.npz", **{tag(*k): v.astype(np.float16) for k, v in res.items()})
+    np.savez(part(c) + ".tmp.npz", **{tag(*k): v.astype(np.float32) for k, v in res.items()})   # float32: 40B residual channels reach ~1e16
     os.replace(part(c) + ".tmp.npz", part(c))
     done += len(chunk)
     rate = done / (time.time() - t0)
