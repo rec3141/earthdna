@@ -96,11 +96,20 @@ Pearson r between predicted and true tree distance on pairs touching held-out sp
 - **Weaknesses.** Needs FP8 through Transformer Engine (compute capability >= 8.9: L40S, H100; not A30). Its tree-distance
   subspace overfits (8,192 dims -> 82k weights on 2,400 species): held-out r 0.64, or 0.73 after PCA-256, still below
   the 7B. Layers past ~20 of 24 collapse (layer 21: 0.21 at phylum).
-- **Peculiarities.** Run one model per GPU (fits a 48 GB L40S; ~1 window/s each), faster than splitting one model
+- **Peculiarities.** The 40B minus its late layers (see the 40B section), so its layer 21 already sits in the
+  high-norm region. Arc says it needs a Hopper GPU for correctness (FP8 through Transformer Engine); our 20B runs were on
+  L40S (Ada), whose FP8 GEMMs mmaemu found to match Hopper's for these models, but we have not checked the 20B's
+  reference loss on L40S. Run one model per GPU (fits a 48 GB L40S; ~1 window/s each), faster than splitting one model
   across two GPUs. Split across GPUs it returned NaN until vortex's opt-in Triton kernels were disabled
   (`embed_evo2.py` now enables them only on a single GPU).
 
 ### Evo 2 40B
+> **Read the release notes first:** [evo2 v0.5.0](https://github.com/ArcInstitute/evo2/releases/tag/v0.5.0) explains
+> that Evo 2 20B *is* the 40B with its late, high-norm layers removed ("model surgery" guided by a logit lens; no
+> retraining). Everything in the Peculiarities below is that same phenomenon, rediscovered the slow way. It also means
+> the 20B and 40B rows in Benchmark 1 are one model read at different points: the 20B's `mlp.l3` at layer 18 beat the
+> 40B's residual stream at block 20 because of *where* it was read, not which model.
+
 - **Strengths.** It is the model the others are measured against: on 2 x H100 our run reproduces evo2's reference test
   exactly (loss 0.2160, accuracy 91.67%). Generation through NVIDIA's free hosted API (~36 ms per nucleotide).
 - **Weaknesses.** Worse than the 20B for taxonomy embeddings: its residual stream jumps to ~1e16 at block 23 (every
