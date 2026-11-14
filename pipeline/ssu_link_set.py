@@ -44,11 +44,13 @@ with gzip.open(os.path.join(a.gtdb, "metadata", "bac120_metadata_r226.tsv.gz"), 
         if r[c["gtdb_representative"]] == "t": tax[strip(r[0])] = r[c["gtdb_taxonomy"]]
 
 ssu = {}  # genome -> (contig, seq) of its longest reported 16S
+ssu_contigs = collections.defaultdict(set)  # genome -> all contigs carrying any reported SSU hit
 with gzip.open(os.path.join(a.gtdb, "ssu", "ssu_all_r226.fna.gz"), "rt") as f:
     name = None; buf = []
     def put():
         if name is None: return
         g, contig = name.split("~", 1); g = strip(g); s = "".join(buf).upper()
+        ssu_contigs[g].add(contig)
         if g in tax and len(s) >= a.min_ssu and (g not in ssu or len(s) > len(ssu[g][1])): ssu[g] = (contig, s)
     for l in f:
         if l[0] == ">": put(); name = l[1:].split()[0]; buf = []
@@ -64,9 +66,10 @@ for g in sorted(ssu, key=crc):
     by_fam[rank(tax[g], 5)].append(g); by_ord[rank(tax[g], 4)].append(g)
 
 paths = {}   # accession -> genome FASTA (genome_paths.tsv: file name, directory under skani/)
-for l in open(os.path.join(a.gtdb, "skani", "genome_paths.tsv")):
-    p = l.split()
-    if len(p) >= 2: paths[p[0].split("_genomic")[0]] = os.path.join(a.gtdb, "skani", p[1], p[0])
+with open(os.path.join(a.gtdb, "skani", "genome_paths.tsv")) as f:
+    for l in f:
+        p = l.split()
+        if len(p) >= 2: paths[p[0].split("_genomic")[0]] = os.path.join(a.gtdb, "skani", p[1], p[0])
 
 def contigs(path):
     with gzip.open(path, "rt") if path.endswith(".gz") else open(path) as f:
@@ -78,27 +81,34 @@ def contigs(path):
             else: buf.append(l.strip())
         if name: yield name, "".join(buf)
 
+def central_window(s):
+    m = (len(s) - a.contig_len) // 2
+    return s[m:m + a.contig_len].upper()
+
 picked, fams = [], set()
-cf, sf, pairs = open(a.out + ".contigs.fa", "w"), open(a.out + ".ssu.fa", "w"), open(a.out + ".pairs.tsv", "w")
-pairs.write("test\tcandidate\trelation\ttaxonomy\n")
 ssu_written = set()
-def write_ssu(g):
-    if g not in ssu_written: sf.write(f">{g}\n{ssu[g][1]}\n"); ssu_written.add(g)
-for g in new:
-    if len(picked) >= a.n: break
-    fam, odr, gen = rank(tax[g], 5), rank(tax[g], 4), rank(tax[g], 6)
-    if fam in fams: continue
-    fdec = [x for x in by_fam[fam] if rank(tax[x], 6) != gen][:a.n_family]
-    odec = [x for x in by_ord[odr] if rank(tax[x], 5) != fam][:a.n_order]
-    if len(fdec) < a.n_family or len(odec) < a.n_order: continue
-    path = paths.get(g)
-    if not path or not os.path.exists(path): continue
-    best = max(((n, s) for n, s in contigs(path) if n != ssu[g][0] and len(s) >= a.min_contig),
-               key=lambda x: len(x[1]), default=None)
-    if not best: continue
-    s = best[1]; m = (len(s) - a.contig_len) // 2
-    cf.write(f">{g}\n{s[m:m + a.contig_len].upper()}\n")
-    for x, rel in [(g, "self")] + [(x, "family") for x in fdec] + [(x, "order") for x in odec]:
-        write_ssu(x); pairs.write(f"{g}\t{x}\t{rel}\t{tax[x]}\n")
-    picked.append(g); fams.add(fam)
+with open(a.out + ".contigs.fa", "w") as cf, open(a.out + ".ssu.fa", "w") as sf, open(a.out + ".pairs.tsv", "w") as pairs:
+    pairs.write("test\tcandidate\trelation\ttaxonomy\n")
+    def write_ssu(g):
+        if g not in ssu_written: sf.write(f">{g}\n{ssu[g][1]}\n"); ssu_written.add(g)
+    for g in new:
+        if len(picked) >= a.n: break
+        fam, odr, gen = rank(tax[g], 5), rank(tax[g], 4), rank(tax[g], 6)
+        if fam in fams: continue
+        fdec = [x for x in by_fam[fam] if rank(tax[x], 6) != gen][:a.n_family]
+        odec = [x for x in by_ord[odr] if rank(tax[x], 5) != fam][:a.n_order]
+        if len(fdec) < a.n_family or len(odec) < a.n_order: continue
+        path = paths.get(g)
+        if not path or not os.path.exists(path): continue
+        best = max(
+            ((n, s) for n, s in contigs(path)
+             if n not in ssu_contigs[g] and len(s) >= a.min_contig and "NN" not in central_window(s)),
+            key=lambda x: len(x[1]),
+            default=None,
+        )
+        if not best: continue
+        cf.write(f">{g}\n{central_window(best[1])}\n")
+        for x, rel in [(g, "self")] + [(x, "family") for x in fdec] + [(x, "order") for x in odec]:
+            write_ssu(x); pairs.write(f"{g}\t{x}\t{rel}\t{tax[x]}\n")
+        picked.append(g); fams.add(fam)
 print(f"{len(picked)} test genomes (one per family), {len(ssu_written)} 16S sequences -> {a.out}.*")
