@@ -41,15 +41,26 @@ if a.rc: combos += [(l, p + "rc") for l in layers for p in pools]
 parts = a.out + ".parts"
 os.makedirs(parts, exist_ok=True)
 
-ids, seqs, cur = [], [], None
+ids, seqs, sid, cur = [], [], None, None
 with (gzip.open if a.fasta.endswith(".gz") else open)(a.fasta, "rt") as f:
     for line in f:
-        if line[0] == ">":
-            if cur is not None: seqs.append("".join(cur))
-            ids.append(line[1:].split()[0]); cur = []
+        if line.startswith(">"):
+            if cur is not None:
+                seq = "".join(cur)
+                if not seq: raise SystemExit(f"empty sequence for {sid} in {a.fasta}")
+                ids.append(sid); seqs.append(seq)
+            toks = line[1:].split()
+            if not toks: raise SystemExit(f"empty FASTA header in {a.fasta}")
+            sid, cur = toks[0], []
         else:
-            cur.append(line.strip().upper().replace("U", "T"))
-    if cur is not None: seqs.append("".join(cur))
+            s = line.strip()
+            if s:
+                if cur is None: raise SystemExit(f"sequence data before first FASTA header in {a.fasta}")
+                cur.append(s.upper().replace("U", "T"))
+    if cur is not None:
+        seq = "".join(cur)
+        if not seq: raise SystemExit(f"empty sequence for {sid} in {a.fasta}")
+        ids.append(sid); seqs.append(seq)
 nchunk = (len(seqs) + a.chunk - 1) // a.chunk
 part = lambda c: f"{parts}/{c:06d}.npz"
 tag = lambda l, p: l.replace(".", "_") + "." + p
@@ -57,14 +68,37 @@ tag = lambda l, p: l.replace(".", "_") + "." + p
 if a.assemble:
     missing = [c for c in range(nchunk) if not os.path.exists(part(c))]
     if missing: raise SystemExit(f"{len(missing)} of {nchunk} chunks missing, first {missing[0]}")
-    outs = {k: open(f"{a.out}.{tag(*k)}.fsb", "wb") for k in combos}
-    for c in range(nchunk):
-        z = np.load(part(c))
-        for k, o in outs.items():
-            if c == 0: o.write(b"FSB1" + struct.pack("<iq", z[tag(*k)].shape[1], len(ids)))
-            o.write(z[tag(*k)].astype(np.float32).tobytes())
-    for o in outs.values(): o.write("\n".join(ids).encode()); o.close()
-    print(f"{len(ids)} sequences -> {', '.join(o.name for o in outs.values())}")
+    outs = {k: open(f"{a.out}.{tag(*k)}.fsb.tmp", "wb") for k in combos}
+    try:
+        if nchunk == 0:
+            for o in outs.values():
+                o.write(b"FSB1" + struct.pack("<iq", 0, 0))
+        dims = {}
+        for c in range(nchunk):
+            exp_rows = len(seqs[c * a.chunk:(c + 1) * a.chunk])
+            with np.load(part(c)) as z:
+                for k, o in outs.items():
+                    arr = z[tag(*k)]
+                    if arr.ndim != 2 or arr.shape[0] != exp_rows:
+                        raise SystemExit(f"{part(c)} {tag(*k)}: expected {exp_rows} rows, got {arr.shape}")
+                    if c == 0:
+                        dims[k] = arr.shape[1]
+                        o.write(b"FSB1" + struct.pack("<iq", dims[k], len(ids)))
+                    elif arr.shape[1] != dims[k]:
+                        raise SystemExit(f"{part(c)} {tag(*k)}: expected dim {dims[k]}, got {arr.shape[1]}")
+                    o.write(arr.astype(np.float32).tobytes())
+        for o in outs.values():
+            o.write("\n".join(ids).encode())
+            o.close()
+        final_names = []
+        for k in combos:
+            dst = f"{a.out}.{tag(*k)}.fsb"
+            os.replace(dst + ".tmp", dst)
+            final_names.append(dst)
+    finally:
+        for o in outs.values():
+            if not o.closed: o.close()
+    print(f"{len(ids)} sequences -> {', '.join(final_names)}")
     raise SystemExit
 
 import torch
@@ -107,12 +141,13 @@ def embed(batch):
         h = emb[l]                  # a model split over GPUs returns each layer on its own device
         hn = None
         for p in pools:
-            m = w[p].to(h.device).float()[..., None]
+            mb = w[p].to(h.device)[..., None]
+            denom = mb.float().sum(1).clamp_min(1.0)
             if p.endswith("n"):
                 if hn is None: hn = h / h.norm(dim=-1, keepdim=True).clamp_min(1e-30)
                 x = hn
             else: x = h
-            out[l, p] = ((x * m).sum(1) / m.sum(1)).cpu().numpy()
+            out[l, p] = (torch.where(mb, x, torch.zeros_like(x)).sum(1) / denom).cpu().numpy()
     return out
 
 def safe_embed(batch):
@@ -155,8 +190,9 @@ if a.check:
     for i, s in enumerate(test):
         u = embed([s])
         for k in u:
-            cos = float(np.dot(b[k][i], u[k][0]) / np.linalg.norm(b[k][i]) / np.linalg.norm(u[k][0]))
-            if cos < 0.999: print(f"WARN batched vs unbatched cosine {cos:.5f} for {ids[i]} {k}")
+            nb, nu = np.linalg.norm(b[k][i]), np.linalg.norm(u[k][0])
+            cos = float(np.dot(b[k][i], u[k][0]) / (nb * nu)) if nb > 0 and nu > 0 else float("nan")
+            if not (cos >= 0.999): print(f"WARN batched vs unbatched cosine {cos:.5f} for {ids[i]} {k}", flush=True)
     print(f"check done on {len(test)} sequences", flush=True)
 
 end = min(a.end if a.end is not None else nchunk, nchunk)

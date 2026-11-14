@@ -23,14 +23,16 @@ a = ap.parse_args()
 
 def fasta(p):
     d, n = {}, None
-    for l in open(p):
-        if l[0] == ">": n = l[1:].strip(); d[n] = []
-        else: d[n].append(l.strip())
+    with open(p) as f:
+        for l in f:
+            if l[0] == ">": n = l[1:].strip(); d[n] = []
+            else: d[n].append(l.strip())
     return {k: "".join(v) for k, v in d.items()}
 contig, ssu = fasta(a.set + ".contigs.fa"), fasta(a.set + ".ssu.fa")
-pairs = [l.rstrip("\n").split("\t") for l in open(a.set + ".pairs.tsv")][1:]
+with open(a.set + ".pairs.tsv") as f:
+    pairs = [l.rstrip("\n").split("\t") for l in f][1:]
 tests = sorted({p[0] for p in pairs})[a.start:a.end]
-rc = lambda s: s[::-1].translate(str.maketrans("ACGTN", "TGCAN"))
+rc = lambda s: s[::-1].translate(str.maketrans("ACGTRYKMBVDHNacgtrykmbvdhn", "TGCAYRMKVBHDNtgcayrmkvbhdn"))
 
 model = Evo2(a.model_name, local_path=a.local_path)
 dev = next(model.model.parameters()).device
@@ -46,15 +48,15 @@ def tail_logprob(prefix, target):
     return float(tok[len(prefix):].sum())   # tok[i] predicts token i+1: target[1:] is predicted from index len(prefix)
 
 uncond = {}
-out = open(a.out + ".tsv", "w")
-out.write("test\tcandidate\trelation\tlen\tuncond\tcond_fwd\tcond_rev\tgain\n")
-t0 = time.time()
-for k, g in enumerate(tests):
-    c = contig[g]
-    for p in (p for p in pairs if p[0] == g):
-        s = ssu[p[1]]
-        if p[1] not in uncond: uncond[p[1]] = tail_logprob("", s)
-        f, r = tail_logprob(c, s), tail_logprob(rc(c), s)
-        out.write(f"{g}\t{p[1]}\t{p[2]}\t{len(s)}\t{uncond[p[1]]:.3f}\t{f:.3f}\t{r:.3f}\t{max(f, r) - uncond[p[1]]:.3f}\n")
-    out.flush()
-    print(f"{k + 1}/{len(tests)} genomes, {time.time() - t0:.0f} s", flush=True)
+with open(a.out + ".tsv", "w") as out:
+    out.write("test\tcandidate\trelation\tlen\tuncond\tcond_fwd\tcond_rev\tgain\n")
+    t0 = time.time()
+    for k, g in enumerate(tests):
+        c = contig[g]
+        for p in (p for p in pairs if p[0] == g):
+            s = ssu[p[1]]
+            if p[1] not in uncond: uncond[p[1]] = tail_logprob("", s)
+            f, r = tail_logprob(c, s), tail_logprob(rc(c), s)
+            out.write(f"{g}\t{p[1]}\t{p[2]}\t{len(s)}\t{uncond[p[1]]:.3f}\t{f:.3f}\t{r:.3f}\t{max(f, r) - uncond[p[1]]:.3f}\n")
+        out.flush()
+        print(f"{k + 1}/{len(tests)} genomes, {time.time() - t0:.0f} s", flush=True)

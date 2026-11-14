@@ -31,7 +31,8 @@ ap.add_argument("--models", help="models globe: KEY=label;... (layouts named <sh
 a = ap.parse_args()
 os.makedirs(a.outdir, exist_ok=True)
 
-lines = [l.rstrip("\n").split("\t") for l in open(a.tax)]
+with open(a.tax) as tf:
+    lines = [l.rstrip("\n").split("\t") for l in tf]
 header, rows = lines[0], lines[1:]
 N = len(rows)
 perm = np.random.default_rng(3).permutation(N)
@@ -73,32 +74,46 @@ for k, spec in enumerate(a.layout):
     name, path = spec.split("=", 1)
     lo, la = lonlat(path)
     if k == 0:
-        open(os.path.join(a.outdir, "pos.b64.txt"), "w").write(b64(lo, la, gi[perm].astype(np.uint8)))
+        with open(os.path.join(a.outdir, "pos.b64.txt"), "w") as f:
+            f.write(b64(lo, la, gi[perm].astype(np.uint8)))
     else:
-        open(os.path.join(a.outdir, f"layout_{name}.b64.txt"), "w").write(b64(lo, la))
+        with open(os.path.join(a.outdir, f"layout_{name}.b64.txt"), "w") as f:
+            f.write(b64(lo, la))
     layouts.append(name)
-open(os.path.join(a.outdir, "tax.b64.txt"), "w").write(b64(ge[perm].astype("<u2"), li[perm].astype("<u2"),
-                                                        sp[perm].astype("<u2" if species_bytes == 2 else "<u4")))
-open(os.path.join(a.outdir, "ranks.b64.txt"), "w").write(b64(*(x[perm].astype("<u2") for x in rank_codes)))
+with open(os.path.join(a.outdir, "tax.b64.txt"), "w") as f:
+    f.write(b64(ge[perm].astype("<u2"), li[perm].astype("<u2"), sp[perm].astype("<u2" if species_bytes == 2 else "<u4")))
+with open(os.path.join(a.outdir, "ranks.b64.txt"), "w") as f:
+    f.write(b64(*(x[perm].astype("<u2") for x in rank_codes)))
 if a.flags:
-    fr = {l.split("\t")[0]: l.rstrip("\n").split("\t") for l in list(open(a.flags))[1:]}
+    with open(a.flags) as ff:
+        fr = {l.split("\t")[0]: l.rstrip("\n").split("\t") for l in list(ff)[1:]}
     gix = {g: i for i, g in enumerate(groups)}
     flag = np.array([int(fr[r[0]][1]) for r in rows], np.uint8)
-    maj = np.array([gix.get(fr[r[0]][2] + " · " + fr[r[0]][3], 255) if int(fr[r[0]][1]) else 255 for r in rows], np.uint8)
-    open(os.path.join(a.outdir, "flags.b64.txt"), "w").write(b64(flag[perm], maj[perm]))
+    def maj_group(rid):
+        rec = fr[rid]
+        if not int(rec[1]):
+            return 255
+        grp = rec[3] if len(rec) > 3 else ""
+        return gix.get(rec[2] + " · " + grp, 255) if grp else 255
+    maj = np.array([maj_group(r[0]) for r in rows], np.uint8)
+    with open(os.path.join(a.outdir, "flags.b64.txt"), "w") as f:
+        f.write(b64(flag[perm], maj[perm]))
 trait_names = []
 if a.traits:
-    tl = [l.rstrip("\n").split("\t") for l in open(a.traits)]
+    with open(a.traits) as trf:
+        tl = [l.rstrip("\n").split("\t") for l in trf]
     key, trait_names = tl[0][0], tl[0][1:]
     assert len(trait_names) <= 8, "at most 8 traits fit in a byte"
     kc = header.index(key)
     bits = {r[0]: sum(1 << k for k, v in enumerate(r[1:]) if v == "1") for r in tl[1:]}
     tr = np.array([bits.get(r[kc], 0) for r in rows], np.uint8)
-    open(os.path.join(a.outdir, "traits.b64.txt"), "w").write(b64(tr[perm]))
+    with open(os.path.join(a.outdir, "traits.b64.txt"), "w") as f:
+        f.write(b64(tr[perm]))
     print("traits: " + ", ".join(f"{n} {int((tr >> k & 1).sum())}" for k, n in enumerate(trait_names)))
 extra = dict(models=[dict(key=k, label=v) for k, v in (m.split("=", 1) for m in a.models.split(";"))]) if a.models else {}
-json.dump(dict(**extra, n=N, title=a.title, layouts=layouts, flags=bool(a.flags), traits=trait_names, groups=groups, groupCounts=gcount,
-               genera=genera, lineages=[x[1:] for x in lineages], lineageRank="".join(x[0] for x in lineages),
-               species=species, speciesBytes=species_bytes, ranks=dict(levels=["domain"] + RANKS + ["genus", "species"], names=rank_names)),
-          open(os.path.join(a.outdir, "globe.json"), "w"), separators=(",", ":"))
+with open(os.path.join(a.outdir, "globe.json"), "w") as gf:
+    json.dump(dict(**extra, n=N, title=a.title, layouts=layouts, flags=bool(a.flags), traits=trait_names, groups=groups, groupCounts=gcount,
+                   genera=genera, lineages=[x[1:] for x in lineages], lineageRank="".join(x[0] for x in lineages),
+                   species=species, speciesBytes=species_bytes, ranks=dict(levels=["domain"] + RANKS + ["genus", "species"], names=rank_names)),
+              gf, separators=(",", ":"))
 print(f"{N} points, {len(groups)} groups, {len(genera)} genera, {len(species)} species -> {a.outdir}")

@@ -11,7 +11,8 @@ import sys
 import numpy as np
 
 taxf, knnf, K, out = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
-rows = [l.rstrip("\n").split("\t") for l in open(taxf)][1:]
+with open(taxf) as tf:
+    rows = [l.rstrip("\n").split("\t") for l in tf][1:]
 N = len(rows)
 I = np.fromfile(knnf, np.int32).reshape(N, K)[:, :15]
 
@@ -23,15 +24,25 @@ def check(labels):
     same = (NL == L[:, None]).mean(1)
     maj = np.array([np.bincount(r[r >= 0]).argmax() if (r >= 0).any() else -1 for r in NL])
     majf = (NL == maj[:, None]).mean(1)
-    return (L >= 0) & (same <= 0.2) & (majf >= 0.6), [names[m] if m >= 0 else "" for m in maj]
+    has_maj = (maj >= 0) & (majf >= 0.6)
+    return (L >= 0) & (same <= 0.2) & has_maj, [names[m] if m >= 0 else "" for m in maj], has_maj
 
 dom = [r[1] for r in rows]
-cd, md = check(dom)
-cg, mg = check([r[1] + ";" + r[2] if r[2] else "" for r in rows])
+cd, md, _ = check(dom)
+cg, mg, _ = check([r[1] + ";" + r[2] if r[2] else "" for r in rows])
+_, mgu, hgu = check([r[1] + ";" + (r[2] or "?") if r[1] else "" for r in rows])
 flag = np.where(cd, 2, np.where(cg, 1, 0))
 with open(out, "w") as f:
     f.write("id\tflag\tneighbour_domain\tneighbour_group\n")
-    for r, fl, a, b in zip(rows, flag, md, mg):
+    for r, fl, a, b, bu, hu in zip(rows, flag, md, mg, mgu, hgu):
         d, _, g = b.partition(";")
-        f.write(f"{r[0]}\t{fl}\t{d or a}\t{g}\n")
+        du, _, gu = bu.partition(";")
+        nd = d if fl == 1 else (a or d)
+        if fl == 1:
+            ng = g
+        elif fl == 2:
+            ng = gu if (hu and du == a) else ""
+        else:
+            ng = g if d == a else ""
+        f.write(f"{r[0]}\t{fl}\t{nd}\t{ng}\n")
 print(f"{(flag == 2).sum()} domain and {(flag == 1).sum()} group conflicts of {N}")

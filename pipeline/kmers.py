@@ -11,8 +11,9 @@ import numpy as np
 
 ap = argparse.ArgumentParser()
 ap.add_argument("fasta"); ap.add_argument("out"); ap.add_argument("--k", type=int, default=5)
-ap.add_argument("--rc", action="store_true")
-ap.add_argument("--canonical", action="store_true")
+strand = ap.add_mutually_exclusive_group()
+strand.add_argument("--rc", action="store_true")
+strand.add_argument("--canonical", action="store_true")
 ap.add_argument("--min-len", type=int, default=0, help="skip shorter sequences")
 a = ap.parse_args()
 k = a.k

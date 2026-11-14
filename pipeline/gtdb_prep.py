@@ -40,6 +40,10 @@ ap.add_argument("--limit", type=int, default=0, help="only this many genomes, ch
 a = ap.parse_args()
 
 k, F = a.k, a.frag
+if k < 1 or k > 15:
+    raise SystemExit(f"--k must be in 1..15 (got {k})")
+if F < k:
+    raise SystemExit(f"--frag ({F}) must be >= --k ({k})")
 lut = np.full(256, 255, np.uint8)
 for i, c in enumerate(b"ACGT"): lut[c] = i; lut[c + 32] = i
 rc = np.array([sum((3 - ((w >> (2 * j)) & 3)) * 4 ** (k - 1 - j) for j in range(k)) for w in range(4 ** k)])
@@ -68,10 +72,10 @@ def shred(job):
         okw = (cb[st + F] - cb[st] <= 10) & (cr[st + F - 1] - cr[st] == 0)
         if not okw.any(): continue
         # k-mer codes inside each kept window, skipping those that span ambiguity codes
-        C = np.where(bad, 0, code).astype(np.uint16).reshape(nw, F)[okw]
+        C = np.where(bad, 0, code).astype(np.uint32).reshape(nw, F)[okw]
         B = bad.reshape(nw, F)[okw]
         m, L = len(C), F - k + 1
-        w = np.zeros((m, L), np.uint16); b = np.zeros((m, L), bool)
+        w = np.zeros((m, L), np.uint32); b = np.zeros((m, L), bool)
         for j in range(k): w = w * 4 + C[:, j:j + L]; b |= B[:, j:j + L]
         idx = col[w] + (np.arange(m) * D)[:, None]
         n = np.bincount(idx[~b], minlength=m * D).reshape(m, D)
