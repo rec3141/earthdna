@@ -30,6 +30,8 @@ ap.add_argument("--batch", type=int, default=20000, help="fragments per worker t
 ap.add_argument("--maps-only", action="store_true", help="reuse OUT.fsb (its ids) and only write the layout maps")
 a = ap.parse_args()
 k = a.k
+if a.len < k:
+    raise SystemExit(f"--len ({a.len}) must be >= --k ({k})")
 
 # canonical columns exactly as gtdb_prep.py builds them
 lut = np.full(256, 255, np.uint8)

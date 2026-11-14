@@ -20,18 +20,41 @@ ap.add_argument("--ref", type=float, default=0.30); ap.add_argument("--min-per-g
 a = ap.parse_args()
 T = int(a.ref * 2 ** 32)
 
-lines = open(a.genomes).read().splitlines()
+with open(a.genomes) as gf:
+    lines = gf.read().splitlines()
 gcols = lines[0].split("\t")
 c0 = gcols.index("domain")
 tax = {l.split("\t")[0]: l.split("\t")[c0:] for l in lines[1:]}
 cols = gcols[c0:]
 acc_of = lambda fid: "_".join(fid.split("_")[:2])          # GCA_000008085.1_<contig>_<start>
 
-paths = [p for p in open(a.shards).read().split() if p]
-def header(p):
-    f = open(p, "rb"); f.read(4); d, n = struct.unpack("<iq", f.read(12)); return f, d, n
+with open(a.shards) as sf:
+    paths = [p for p in sf.read().split() if p]
+if not paths:
+    raise SystemExit("no shard paths in " + a.shards)
+
+def read_header(f, p):
+    hdr = f.read(16)
+    if len(hdr) != 16 or hdr[:4] != b"FSB1":
+        raise SystemExit(f"{p}: invalid FSB1 header")
+    d, n = struct.unpack("<iq", hdr[4:])
+    if d < 0 or n < 0:
+        raise SystemExit(f"{p}: negative dimensions ({n}, {d})")
+    return d, n
+
 def ids_of(p):
-    f, d, n = header(p); f.seek(16 + 4 * d * n); return f.read().decode().split("\n")
+    with open(p, "rb") as f:
+        d, n = read_header(f, p)
+        f.seek(0, 2)
+        end = f.tell()
+        if end < 16 + 4 * d * n:
+            raise SystemExit(f"{p}: truncated FSB1 matrix")
+        f.seek(16 + 4 * d * n)
+        tail = f.read().decode()
+    ids = tail.splitlines() if n else ([] if tail == "" else tail.splitlines())
+    if len(ids) != n:
+        raise SystemExit(f"{p}: id count {len(ids)} != header n {n}")
+    return ids
 
 # pass 1: hashes, and per genome the fragments to add when the hash fraction gives it too few
 pick = []                       # per shard: boolean mask
@@ -56,25 +79,28 @@ for acc, cand in per_genome.items():
     for _, s, r in sorted(cand)[:need]: pick[s][r] = True; extra += 1
 
 # pass 2: write the chosen rows, their taxonomy and anchor groups
-D = header(paths[0])[1]
-out = open(a.out + ".ref.fsb", "wb"); out.write(b"FSB1" + struct.pack("<iq", D, 0))
-taxf = open(a.out + ".ref.tax.tsv", "w"); taxf.write("id\t" + "\t".join(cols) + "\n")
+with open(paths[0], "rb") as f0:
+    D, _ = read_header(f0, paths[0])
 refids, rows = [], []
-for s, p in enumerate(paths):
-    f, d, n = header(p)
-    m = pick[s]
-    ids = ids_of(p)
-    f.seek(16)
-    for start in range(0, n, 200000):                     # stream rows in blocks
-        stop = min(n, start + 200000)
-        X = np.frombuffer(f.read(4 * d * (stop - start)), np.float32).reshape(-1, d)
-        out.write(X[m[start:stop]].tobytes())
-    for i in np.flatnonzero(m):
-        r = tax[acc_of(ids[i])]
-        refids.append(ids[i]); rows.append(r)
-        taxf.write(ids[i] + "\t" + "\t".join(r) + "\n")
-out.write("\n".join(refids).encode()); out.seek(8); out.write(struct.pack("<q", len(refids))); out.close()
-taxf.close()
+with open(a.out + ".ref.fsb", "wb") as out, open(a.out + ".ref.tax.tsv", "w") as taxf:
+    out.write(b"FSB1" + struct.pack("<iq", D, 0))
+    taxf.write("id\t" + "\t".join(cols) + "\n")
+    for s, p in enumerate(paths):
+        m = pick[s]
+        ids = ids_of(p)
+        with open(p, "rb") as f:
+            d, n = read_header(f, p)
+            if d != D:
+                raise SystemExit(f"{p}: feature width {d} != {D}")
+            for start in range(0, n, 200000):                     # stream rows in blocks
+                stop = min(n, start + 200000)
+                X = np.frombuffer(f.read(4 * d * (stop - start)), np.float32).reshape(-1, d)
+                out.write(X[m[start:stop]].tobytes())
+        for i in np.flatnonzero(m):
+            r = tax[acc_of(ids[i])]
+            refids.append(ids[i]); rows.append(r)
+            taxf.write(ids[i] + "\t" + "\t".join(r) + "\n")
+    out.write("\n".join(refids).encode()); out.seek(8); out.write(struct.pack("<q", len(refids)))
 codes = []
 for j, deep in ((0, 1), (1, 2), (3, 4), (4, 5)):  # domain, group, class, order, as gtdb_prep.py
     ix, c = {}, []
