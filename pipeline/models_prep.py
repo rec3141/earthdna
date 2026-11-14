@@ -21,9 +21,19 @@ ids = [r[0] for r in rows]
 
 def read(p):
     with open(p, "rb") as f:
-        f.read(4); d, n = struct.unpack("<iq", f.read(12))
-        X = np.frombuffer(f.read(4 * d * n), np.float32).reshape(n, d); got = f.read().decode().split("\n")[:n]
+        magic = f.read(4)
+        if magic != b"FSB1":
+            raise SystemExit(f"{p}: invalid FSB1 magic {magic!r}")
+        d, n = struct.unpack("<iq", f.read(12))
+        buf = f.read(4 * d * n)
+        if len(buf) != 4 * d * n:
+            raise SystemExit(f"{p}: truncated FSB1 matrix ({len(buf)} < {4 * d * n})")
+        X = np.frombuffer(buf, np.float32).reshape(n, d)
+        tail = f.read().decode()
+        got = tail.split("\n")[:n] if n > 0 else ([] if tail == "" else tail.split("\n"))
     assert got == ids, f"{p}: rows are not in {a.tax} order"
+    if not np.isfinite(X).all():
+        raise SystemExit(f"{p}: non-finite values in input features")
     return X.astype(np.float64)
 
 def write(p, X):
@@ -43,5 +53,11 @@ for spec in a.zscore:
     write(f"{a.out}.{name}.fsb", (X - X.mean(0)) / (X.std(0) + 1e-9))
 for spec in a.subspace:
     name, p, m = spec.split("="); X = read(p); M = np.load(m)
-    Z = ((X - M["mu"]) / M["sd"] - M["b"]) @ M["W"].T
-    write(f"{a.out}.{name}.fsb", Z / np.linalg.norm(Z, axis=1, keepdims=True))
+    sd = M["sd"]
+    if not (np.isfinite(sd).all() and np.all(sd > 0)):
+        raise SystemExit(f"{m}: non-positive or non-finite channel sd")
+    Z = ((X - M["mu"]) / sd - M["b"]) @ M["W"].T
+    norms = np.linalg.norm(Z, axis=1, keepdims=True)
+    if not (np.isfinite(norms).all() and np.all(norms > 0)):
+        raise SystemExit(f"{p}: zero or non-finite subspace row norm")
+    write(f"{a.out}.{name}.fsb", Z / norms)
