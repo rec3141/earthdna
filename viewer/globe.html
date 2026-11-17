@@ -1,4 +1,5 @@
 <title>EarthDNA</title>
+<meta charset="utf-8">
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500;600&family=Newsreader:ital,opsz,wght@1,6..72,400;1,6..72,500&family=JetBrains+Mono:wght@400;500&display=swap">
@@ -18,6 +19,7 @@
   color-scheme: dark;
 }
 html, body { height: 100%; }
+[hidden] { display: none !important; }
 body { background: var(--space); color: var(--ink); font-family: var(--f-ui); overflow: hidden; }
 canvas#gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
 canvas#gl.dragging { cursor: grabbing; }
@@ -82,6 +84,9 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px 
 #labels .L2 { font-size: 0.74rem; color: #c3cfdc; }
 #labels .L3 { font-family: var(--f-taxon); font-style: italic; font-size: 0.82rem; color: #d8e2ec; }
 #labels .L4 { font-family: var(--f-taxon); font-style: italic; font-size: 0.74rem; color: #b9c7d6; }
+#labels.dome span { transform-origin: 0 0; }
+body.clean #head, body.clean #key, body.clean #hint, body.clean #tip { display: none; }
+body.clean { background: #000; cursor: none; }
 #loading { position: fixed; inset: 0; display: grid; place-items: center; z-index: 4; color: var(--muted); font-size: 0.9rem; pointer-events: none; }
 #hint { position: fixed; z-index: 2; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(14px + env(safe-area-inset-bottom, 0px)); font-size: 0.72rem; color: var(--muted); text-align: right; line-height: 1.5; }
 @media (max-width: 640px) {
@@ -104,6 +109,7 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px 
     <div class="seg" role="group" aria-label="Projection">
       <button id="vGlobe" aria-pressed="true">Globe</button>
       <button id="vFlat" aria-pressed="false">Equal-area</button>
+      <button id="vDome" aria-pressed="false" title="Fisheye from inside the sphere (dome master: front of the dome at the bottom)">Dome</button>
     </div>
     <button class="btn" id="spin" aria-pressed="true">Pause spin</button>
   </div>
@@ -142,8 +148,9 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px 
 <script>
 (() => {
 const canvas = document.getElementById("gl");
-const gl = canvas.getContext("webgl2", { antialias: true, premultipliedAlpha: false });
 const $ = (id) => document.getElementById(id);
+const Q = new URLSearchParams(location.search);
+const gl = canvas.getContext("webgl2", { antialias: true, premultipliedAlpha: false, preserveDrawingBuffer: Q.has("capture") });
 if (!gl) { $("loading").textContent = "This page needs WebGL2, which this browser does not provide."; return; }
 
 const PALETTE = ["#4e9bf0","#f2994a","#58c78a","#e8595f","#b28df2","#f2d35a","#41c8c8","#f07ab8","#9ccf4f","#e3a37a",
@@ -164,11 +171,20 @@ function prog(vs, fs) {
   return p;
 }
 const PROJ = `
-uniform mat3 uRot; uniform float uFlat; uniform vec2 uScale;
+uniform mat3 uRot; uniform float uFlat; uniform vec2 uScale; uniform vec3 uCam;
 const float PI = 3.14159265;
-// world unit vector -> clip xy, visible flag
+float pDist = 1.0;  // dome: distance from the camera, for point size
+// world unit vector -> clip xy, visible flag.  uFlat: 0 globe, 1 equal-area, 2 dome
 vec3 project(vec3 p) {
   vec3 q = uRot * p;
+  if (uFlat > 1.5) {
+    // camera inside the sphere at uCam, looking at the zenith (+z); equidistant fisheye, 180 degrees across the disc.
+    // seen from inside, so x is mirrored relative to the globe
+    vec3 v = q - uCam; pDist = length(v); v /= pDist;
+    float r = acos(clamp(v.z, -1.0, 1.0)) / (0.5 * PI), s = length(v.xy);
+    vec2 d = s > 1e-6 ? vec2(-v.x, v.y) / s : vec2(0.0);
+    return vec3(d * r * uScale, r <= 1.0 ? 1.0 : 0.0);
+  }
   if (uFlat < 0.5) return vec3(q.xy * uScale, q.z > 0.0 ? 1.0 : 0.0);
   float lam = atan(q.x, q.z), phi = asin(clamp(q.y, -1.0, 1.0));
   float t = phi;
@@ -193,7 +209,7 @@ void main() {
   vec3 s = project(p);
   bool on = aSel > 0u, flagged = uMode > 0.5 && aFlag > 0u;
   gl_Position = vec4(s.xy, on ? 0.0 : flagged ? 0.25 : 0.5, s.z > 0.5 ? 1.0 : 0.0);
-  gl_PointSize = s.z > 0.5 ? uSize * ((on && uHasSel > 0.5) || flagged ? 1.6 : 1.0) : 0.0;
+  gl_PointSize = s.z > 0.5 ? uSize * clamp(pow(pDist, -0.6), 0.5, 6.0) * ((on && uHasSel > 0.5) || flagged ? 1.6 : 1.0) : 0.0;
   vec3 c = uCol[min(aGrp, 127u)];
   if (uHasSel > 0.5 && !on) vCol = vec4(mix(c, vec3(0.45, 0.52, 0.62), 0.75), uAlpha * 0.18);
   else if (uMode > 0.5) vCol = aFlag == 2u ? vec4(0.96, 0.36, 0.48, 1.0) : aFlag == 1u ? vec4(0.97, 0.75, 0.30, 0.95) : vec4(0.40, 0.48, 0.60, uAlpha * 0.3);
@@ -207,7 +223,7 @@ in vec2 aP; out vec2 vP;
 void main() { vP = aP; gl_Position = vec4(aP, 0.99, 1.0); }`, `#version 300 es
 precision highp float;
 in vec2 vP; out vec4 o;
-uniform mat3 uRot; uniform float uFlat; uniform vec2 uScale;
+uniform mat3 uRot; uniform float uFlat; uniform vec2 uScale; uniform vec3 uCam;
 const float PI = 3.14159265;
 float grid(vec3 p) {
   float lat = asin(clamp(p.z, -1.0, 1.0)), lon = atan(p.y, p.x);
@@ -218,7 +234,15 @@ float grid(vec3 p) {
 void main() {
   vec2 s = vP / uScale;
   vec3 ocean = vec3(0.047, 0.094, 0.157), space = vec3(0.024, 0.039, 0.067);
-  if (uFlat < 0.5) {
+  if (uFlat > 1.5) {
+    float r = length(s);
+    if (r > 1.0) { o = vec4(0.0, 0.0, 0.0, 1.0); return; }  // outside the dome master's circle
+    float th = r * 0.5 * PI; vec2 dd = r > 1e-6 ? s / r : vec2(0.0);
+    vec3 d = vec3(-dd.x * sin(th), dd.y * sin(th), cos(th));
+    float b = dot(uCam, d), t = -b + sqrt(max(0.0, b * b - dot(uCam, uCam) + 1.0));
+    vec3 p = transpose(uRot) * (uCam + t * d);
+    o = vec4(ocean * 0.55 + vec3(0.10, 0.16, 0.24) * grid(p) * 0.4 * smoothstep(0.05, 0.4, t), 1.0);  // kept dark: a dome lights itself
+  } else if (uFlat < 0.5) {
     float r2 = dot(s, s);
     if (r2 > 1.0) { float h = exp(-(sqrt(r2) - 1.0) * 28.0); o = vec4(mix(space, vec3(0.16, 0.30, 0.48), h * 0.55), 1.0); return; }
     vec3 q = vec3(s, sqrt(1.0 - r2));
@@ -246,10 +270,35 @@ let N = 0, meta = null, grp, gen, lin, spc, xyz, cellStart, cellIdx, selBuf, sel
 const mul = (a, b) => { const r = new Array(9); for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) r[3 * i + j] = a[3 * i] * b[j] + a[3 * i + 1] * b[3 + j] + a[3 * i + 2] * b[6 + j]; return r; };
 const rotY = (a) => { const c = Math.cos(a), s = Math.sin(a); return [c, 0, s, 0, 1, 0, -s, 0, c]; };
 const rotX = (b) => { const c = Math.cos(b), s = Math.sin(b); return [1, 0, 0, 0, c, -s, 0, s, c]; };
-function centreOn(lon, lat) { rot = mul(rotX(lat), mul(rotY(-lon), R0)); }
+const rotZ = (a) => { const c = Math.cos(a), s = Math.sin(a); return [c, -s, 0, s, c, 0, 0, 0, 1]; };
+const RAD = Math.PI / 180;
+// dome: the audience sits inside the sphere. The point being looked at sits at the front of the dome, domeAlt degrees
+// above the horizon (the bottom of the frame is the front); zooming moves the camera from the centre toward it.
+let dome = false, domeAlt = +(Q.get("dome") || 0) || 40;
+const labelScale = +(Q.get("labelScale") || 1.5);
+function poseRot(lon, lat, roll) {  // radians
+  const c = mul(rotZ(roll || 0), mul(rotX(lat), mul(rotY(-lon), R0)));
+  return dome ? mul(rotX((90 - domeAlt) * RAD), c) : c;
+}
+function centreOn(lon, lat) { rot = poseRot(lon, lat, 0); }
+function aim() { const a = domeAlt * RAD; return [0, -Math.cos(a), Math.sin(a)]; }      // view-space direction looked at
+function cam() { const d = 1 - 1 / Math.max(1, zoom), a = aim(); return [d * a[0], d * a[1], d * a[2]]; }
+const toView = (p) => [0, 1, 2].map((j) => rot[3 * j] * p[0] + rot[3 * j + 1] * p[1] + rot[3 * j + 2] * p[2]);
+const toWorld = (q) => [0, 1, 2].map((j) => rot[j] * q[0] + rot[3 + j] * q[1] + rot[6 + j] * q[2]);
+function lookedAt() { return toWorld(dome ? aim() : [0, 0, 1]); }
+function setView(mode) {  // "globe" | "flat" | "dome", keeping the same place in view
+  const p = lookedAt();
+  flat = mode === "flat"; dome = mode === "dome";
+  if (dome) zoom = Math.max(1, zoom);
+  centreOn(Math.atan2(p[1], p[0]), Math.asin(Math.max(-1, Math.min(1, p[2]))));
+  for (const [id, m] of [["vGlobe", "globe"], ["vFlat", "flat"], ["vDome", "dome"]]) $(id).setAttribute("aria-pressed", m === mode ? "true" : "false");
+  $("labels").classList.toggle("dome", dome);
+  dirty = true;
+}
 
 function scale() {
   const w = canvas.width, h = canvas.height;
+  if (dome) { const m = Math.min(w, h); return [m / w, m / h]; }  // the disc touches the frame; zoom is in cam()
   const base = flat ? Math.min(0.665 * w, 1.33 * h) : 0.92 * Math.min(w, h);  // pixels per two units of radius
   return [base * zoom / w, base * zoom / h];
 }
@@ -352,6 +401,7 @@ function buildLabels() {
 function placeLabels() {
   const box = $("labels");
   if (!labelSets.length || morph) { for (const el of labelPool) el.hidden = true; return; }
+  if (dome) return placeDomeLabels();
   const w = canvas.clientWidth, h = canvas.clientHeight, sc = scale();
   const pxR = sc[0] * w / 2 * (flat ? 0.9 : 1), minDim = Math.min(w, h);
   const taken = [];
@@ -388,17 +438,67 @@ function placeLabels() {
   for (let k = used; k < labelPool.length; k++) labelPool[k].hidden = true;
 }
 
+// dome labels: centred on their anchor, upright for someone facing them (their tops point at the zenith), sized
+// as a fraction of the dome so a frame of any resolution reads the same
+function placeDomeLabels() {
+  const box = $("labels"), w = canvas.clientWidth, h = canvas.clientHeight, R = Math.min(w, h) / 2;
+  const k = R / 500 * labelScale, c = cam(), pxPerRad = R / (Math.PI / 2);
+  const taken = []; let used = 0;
+  const fits = (x0, y0, x1, y1) => { for (const r of taken) if (x0 < r[2] && x1 > r[0] && y0 < r[3] && y1 > r[1]) return false; return true; };
+  for (const set of labelSets) {
+    let shownHere = 0;
+    for (const L of set) {
+      if (used >= 48 || shownHere >= 24) break;
+      const q = toView(L.p), v = [q[0] - c[0], q[1] - c[1], q[2] - c[2]], dist = Math.hypot(v[0], v[1], v[2]);
+      const rpx = L.spread / dist * pxPerRad;
+      if (rpx < 22 * k || rpx > 1.1 * R) continue;
+      const r = Math.acos(Math.max(-1, Math.min(1, v[2] / dist))) / (Math.PI / 2), s = Math.hypot(v[0], v[1]);
+      if (r > 0.93) continue;
+      const dx = s > 1e-6 ? -v[0] / s * r : 0, dy = s > 1e-6 ? v[1] / s * r : 0;
+      const sx = w / 2 + dx * R, sy = h / 2 - dy * R;
+      const ang = r < 0.04 ? 0 : Math.atan2(-dx, -dy);  // clockwise turn that points the label's top at the centre
+      const fs = (L.cls === "L0" ? 17 : L.cls === "L1" ? 13.6 : L.cls === "L4" ? 11.8 : 12.5) * k, cw = L.cls === "L0" ? fs * 0.95 : fs * 0.56;
+      const tw = L.text.length * cw + 8 * k, th = fs * 1.5, ca = Math.abs(Math.cos(ang)), sa = Math.abs(Math.sin(ang));
+      const hw = (tw * ca + th * sa) / 2, hh = (tw * sa + th * ca) / 2;
+      if (Math.hypot(sx - w / 2, sy - h / 2) + Math.max(hw, hh) > R || !fits(sx - hw, sy - hh, sx + hw, sy + hh)) continue;
+      taken.push([sx - hw, sy - hh, sx + hw, sy + hh]);
+      let el = labelPool[used];
+      if (!el) { el = document.createElement("span"); box.appendChild(el); labelPool.push(el); }
+      if (el.textContent !== L.text) el.textContent = L.text;
+      if (el.className !== L.cls) el.className = L.cls;
+      el.style.transform = `translate(${sx.toFixed(1)}px, ${sy.toFixed(1)}px) rotate(${ang.toFixed(4)}rad) scale(${k.toFixed(3)}) translate(-50%, -50%)`;
+      el.hidden = false; used++; shownHere++;
+    }
+  }
+  for (let j = used; j < labelPool.length; j++) labelPool[j].hidden = true;
+}
+
 // ---------- draw
+let show = Q.get("show") ? { url: Q.get("show"), capture: Q.has("capture"), ready: false, t: 0, paused: false, mode: Q.has("dome") ? "dome" : "" } : null, ov = null;
 let dirty = true, morph = null, current = "similarity", flagMode = false, flags = null, majg = null, flagBuf = null;
+async function ensureFlags() {
+  if (flags) return true;
+  const r = await fetch("flags.b64.txt");
+  if (!r.ok) return false;
+  const bin = atob((await r.text()).trim()), b = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
+  flags = b.subarray(0, N); majg = b.subarray(N, 2 * N);
+  gl.bindBuffer(gl.ARRAY_BUFFER, flagBuf); gl.bufferSubData(gl.ARRAY_BUFFER, 0, flags);
+  return true;
+}
+async function ensureLayout(name) {
+  if (layouts[name]) return true;
+  const r = await fetch(`layout_${name}.b64.txt`);
+  if (!r.ok) return false;
+  const bin = atob((await r.text()).trim()), b = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
+  layouts[name] = makeLayout(new Uint16Array(b.buffer, 0, N), new Uint16Array(b.buffer, 2 * N, N));
+  return true;
+}
 async function setColour(mode) {
   if (mode && !flags) {
     $("status").textContent = "Loading label checks…";
-    const r = await fetch("flags.b64.txt");
-    if (!r.ok) { $("status").textContent = "The label checks did not load. Try again."; return; }
-    const bin = atob((await r.text()).trim()), b = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
-    flags = b.subarray(0, N); majg = b.subarray(N, 2 * N);
-    gl.bindBuffer(gl.ARRAY_BUFFER, flagBuf); gl.bufferSubData(gl.ARRAY_BUFFER, 0, flags);
+    if (!await ensureFlags()) { $("status").textContent = "The label checks did not load. Try again."; return; }
   }
   flagMode = mode;
   $("cTax").setAttribute("aria-pressed", mode ? "false" : "true"); $("cFlag").setAttribute("aria-pressed", mode ? "true" : "false");
@@ -412,11 +512,7 @@ async function showLayout(name) {
   if (name === current || morph) return;
   if (!layouts[name]) {
     $("status").textContent = "Loading the sculpted layout…";
-    const r = await fetch(`layout_${name}.b64.txt`);
-    if (!r.ok) { $("status").textContent = "The sculpted layout did not load. Try again."; return; }
-    const bin = atob((await r.text()).trim()), b = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
-    layouts[name] = makeLayout(new Uint16Array(b.buffer, 0, N), new Uint16Array(b.buffer, 2 * N, N));
+    if (!await ensureLayout(name)) { $("status").textContent = "The sculpted layout did not load. Try again."; return; }
     $("status").textContent = name === "sculpt" ? "Sculpted: each sequence is gently pulled toward its domain, phylum, class and order." : "Placed by sequence similarity alone.";
   } else $("status").textContent = name === "sculpt" ? "Sculpted: each sequence is gently pulled toward its domain, phylum, class and order." : "Placed by sequence similarity alone.";
   bindLayouts(layouts[current], layouts[name]);
@@ -431,7 +527,9 @@ function draw() {
   gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
   gl.useProgram(bgProg); gl.bindVertexArray(bgVao);
   gl.uniformMatrix3fv(gl.getUniformLocation(bgProg, "uRot"), true, rot);
-  gl.uniform1f(gl.getUniformLocation(bgProg, "uFlat"), flat ? 1 : 0);
+  const cm = dome ? cam() : [0, 0, 0], fl = dome ? 2 : flat ? 1 : 0;
+  gl.uniform1f(gl.getUniformLocation(bgProg, "uFlat"), fl);
+  gl.uniform3f(gl.getUniformLocation(bgProg, "uCam"), cm[0], cm[1], cm[2]);
   gl.uniform2f(gl.getUniformLocation(bgProg, "uScale"), sc[0], sc[1]);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   if (!N) return;
@@ -439,11 +537,14 @@ function draw() {
   gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL);
   gl.useProgram(ptProg); gl.bindVertexArray(ptVao);
   gl.uniformMatrix3fv(gl.getUniformLocation(ptProg, "uRot"), true, rot);
-  gl.uniform1f(gl.getUniformLocation(ptProg, "uFlat"), flat ? 1 : 0);
+  gl.uniform1f(gl.getUniformLocation(ptProg, "uFlat"), fl);
+  gl.uniform3f(gl.getUniformLocation(ptProg, "uCam"), cm[0], cm[1], cm[2]);
   gl.uniform2f(gl.getUniformLocation(ptProg, "uScale"), sc[0], sc[1]);
   const dpr = canvas.width / canvas.clientWidth;
-  gl.uniform1f(gl.getUniformLocation(ptProg, "uSize"), +$("size").value * dpr * Math.pow(zoom, 0.45));
-  gl.uniform1f(gl.getUniformLocation(ptProg, "uAlpha"), +$("alpha").value);
+  const size = ov ? ov.size : +$("size").value;
+  // dome: sized as a fraction of the disc (so any frame resolution looks the same); nearness enlarges points in the shader
+  gl.uniform1f(gl.getUniformLocation(ptProg, "uSize"), dome ? size * Math.min(canvas.width, canvas.height) / 900 : size * dpr * Math.pow(zoom, 0.45));
+  gl.uniform1f(gl.getUniformLocation(ptProg, "uAlpha"), ov ? ov.alpha : +$("alpha").value);
   gl.uniform1f(gl.getUniformLocation(ptProg, "uHasSel"), hasSel ? 1 : 0);
   gl.uniform1f(gl.getUniformLocation(ptProg, "uMode"), flagMode ? 1 : 0);
   gl.uniform1f(gl.getUniformLocation(ptProg, "uMix"), morph ? morph.t : 0);
@@ -453,7 +554,9 @@ function draw() {
 let last = performance.now();
 function frame(t) {
   const dt = Math.min(0.1, (t - last) / 1000); last = t;
-  if (spin && !dragging) { rot = mul(rotY(0.06 * dt / Math.sqrt(zoom)), rot); dirty = true; }
+  if (show) { if (!show.capture && show.ready) { if (!show.paused) show.t = (show.t + dt) % show.duration; applyShow(show.t); } requestAnimationFrame(frame); return; }
+  // dome: the sky turns about the zenith, slowly (fast motion overhead is uncomfortable)
+  if (spin && !dragging) { rot = mul(dome ? rotZ(0.02 * dt / Math.sqrt(zoom)) : rotY(0.06 * dt / Math.sqrt(zoom)), rot); dirty = true; }
   if (morph) {
     const u = Math.min(1, (t - morph.t0) / morph.dur);
     morph.t = u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2;
@@ -484,6 +587,11 @@ canvas.addEventListener("pointermove", (e) => {
   const dx = e.clientX - lastP[0], dy = e.clientY - lastP[1]; lastP = [e.clientX, e.clientY];
   moved += Math.abs(dx) + Math.abs(dy);
   if (moved > 3) stopSpin();
+  if (dome) {  // take hold of the sky: the point under the pointer stays under it
+    const a = screenToView(e.clientX - dx, e.clientY - dy), b = screenToView(e.clientX, e.clientY);
+    if (a && b) { rot = mul(rotBetween(a, b), rot); dirty = true; }
+    return;
+  }
   const px = (scale()[0] * canvas.clientWidth) / 2;  // pixels per unit radius
   rot = mul(rotY(dx / px), mul(rotX(dy / px), rot)); dirty = true;
 });
@@ -496,7 +604,25 @@ function endPointer(e) {
 }
 canvas.addEventListener("pointerup", endPointer); canvas.addEventListener("pointercancel", endPointer);
 canvas.addEventListener("pointerleave", () => { if (!dragging) $("tip").hidden = true; });
-function setZoom(z) { zoom = Math.max(0.6, Math.min(80, z)); dirty = true; }
+function setZoom(z) { zoom = Math.max(dome ? 1 : 0.6, Math.min(80, z)); dirty = true; }
+// rotation taking unit vector a to unit vector b
+function rotBetween(a, b) {
+  const v = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]], c = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  if (c < -0.9999) return [1, 0, 0, 0, 1, 0, 0, 0, 1];
+  const f = 1 / (1 + c), [x, y, z] = v;
+  return [1 - f * (y * y + z * z), f * x * y - z, f * x * z + y, f * x * y + z, 1 - f * (x * x + z * z), f * y * z - x, f * x * z - y, f * y * z + x, 1 - f * (x * x + y * y)];
+}
+// dome: screen -> the point of the sphere seen there, in view space (unit vector), and its distance from the camera
+let hitDist = 1;
+function screenToView(cx, cy) {
+  const r = canvas.getBoundingClientRect(), sc = scale();
+  const x = ((cx - r.left) / r.width * 2 - 1) / sc[0], y = (1 - (cy - r.top) / r.height * 2) / sc[1], rr = Math.hypot(x, y);
+  if (rr > 1) return null;
+  const th = rr * Math.PI / 2, s = rr > 1e-6 ? Math.sin(th) / rr : 0, d = [-x * s, y * s, Math.cos(th)], c = cam();
+  const b = c[0] * d[0] + c[1] * d[1] + c[2] * d[2], t = -b + Math.sqrt(Math.max(0, b * b - (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]) + 1));
+  hitDist = t;
+  return [c[0] + t * d[0], c[1] + t * d[1], c[2] + t * d[2]];
+}
 canvas.addEventListener("wheel", (e) => { e.preventDefault(); setZoom(zoom * Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
 canvas.addEventListener("dblclick", (e) => {
   const p = screenToWorld(e.clientX, e.clientY); if (!p) return;
@@ -508,7 +634,8 @@ function screenToWorld(cx, cy) {
   const r = canvas.getBoundingClientRect(), sc = scale();
   const x = ((cx - r.left) / r.width * 2 - 1) / sc[0], y = (1 - (cy - r.top) / r.height * 2) / sc[1];
   let q;
-  if (!flat) { const r2 = x * x + y * y; if (r2 > 1) return null; q = [x, y, Math.sqrt(1 - r2)]; }
+  if (dome) { q = screenToView(cx, cy); if (!q) return null; }
+  else if (!flat) { const r2 = x * x + y * y; if (r2 > 1) return null; q = [x, y, Math.sqrt(1 - r2)]; }
   else {
     const mx = 2 * x, my = 2 * y, st = my / Math.SQRT2; if (Math.abs(st) > 1) return null;
     const t = Math.asin(st), lam = mx / (0.9003163 * Math.cos(t)); if (Math.abs(lam) > Math.PI) return null;
@@ -519,7 +646,7 @@ function screenToWorld(cx, cy) {
 }
 function nearest(cx, cy) {
   const p = screenToWorld(cx, cy); if (!p || !N) return -1;
-  const pxPerRad = (scale()[0] * canvas.clientWidth) / 2 * (flat ? 0.9 : 1);
+  const pxPerRad = dome ? Math.min(canvas.clientWidth, canvas.clientHeight) / Math.PI / hitDist : (scale()[0] * canvas.clientWidth) / 2 * (flat ? 0.9 : 1);
   const thr = 8 / pxPerRad, cosT = Math.cos(thr);
   const lat = Math.asin(Math.max(-1, Math.min(1, p[2]))) * 180 / Math.PI, lon = Math.atan2(p[1], p[0]) * 180 / Math.PI;
   const dl = thr * 180 / Math.PI, cj = Math.floor(lon + 180);
@@ -590,21 +717,29 @@ function selectGroups() {
   const lab = [...activeGroups].map((g) => meta.groups[g].split(" · ")[1]).join(", ");
   applySel((j) => activeGroups.has(grp[j]), lab.length > 60 ? `${activeGroups.size} groups` : lab);
 }
+// a name -> the sequences it covers: genus, then species, then family/order/class, then phylum (and, for shows, domain)
+function matchTaxon(name, domains) {
+  const t = name.trim().toLowerCase();
+  const hit = (arr) => { const s = new Set(); arr.forEach((n, k) => { if (n.toLowerCase() === t) s.add(k); }); if (!s.size) arr.forEach((n, k) => { if (n.toLowerCase().includes(t)) s.add(k); }); return s; };
+  if (domains) { const d = new Set(); meta.groups.forEach((g, k) => { if (g.split(" · ")[0].toLowerCase() === t) d.add(k); }); if (d.size) return { test: (j) => d.has(grp[j]), label: name }; }
+  let s = hit(meta.genera); if (s.size) return { test: (j) => s.has(gen[j]), label: s.size === 1 ? meta.genera[[...s][0]] : `${s.size} genera matching “${t}”` };
+  s = hit(meta.species); if (s.size) return { test: (j) => s.has(spc[j]), label: s.size === 1 ? meta.species[[...s][0]] : `${s.size} species matching “${t}”` };
+  s = hit(meta.lineages); if (s.size) return { test: (j) => s.has(lin[j]), label: s.size === 1 ? meta.lineages[[...s][0]] : `${s.size} families, orders or classes matching “${t}”` };
+  s = hit(meta.groups.map((g) => g.split(" · ")[1] || g)); if (s.size) return { test: (j) => s.has(grp[j]), label: `${[...s].map((k) => meta.groups[k].split(" · ")[1]).join(", ")}` };
+  return null;
+}
 $("find").addEventListener("submit", (e) => {
   e.preventDefault();
-  const t = $("q").value.trim().toLowerCase(); if (!t) { clearSel(); return; }
+  const t = $("q").value.trim(); if (!t) { clearSel(); return; }
   activeGroups.clear(); syncKey();
-  const hit = (arr) => { const s = new Set(); arr.forEach((n, k) => { if (n.toLowerCase() === t) s.add(k); }); if (!s.size) arr.forEach((n, k) => { if (n.toLowerCase().includes(t)) s.add(k); }); return s; };
-  let s = hit(meta.genera); if (s.size) return applySel((j) => s.has(gen[j]), s.size === 1 ? meta.genera[[...s][0]] : `${s.size} genera matching “${t}”`);
-  s = hit(meta.species); if (s.size) return applySel((j) => s.has(spc[j]), s.size === 1 ? meta.species[[...s][0]] : `${s.size} species matching “${t}”`);
-  s = hit(meta.lineages); if (s.size) return applySel((j) => s.has(lin[j]), s.size === 1 ? meta.lineages[[...s][0]] : `${s.size} families, orders or classes matching “${t}”`);
-  s = hit(meta.groups.map((g) => g.split(" · ")[1] || g)); if (s.size) return applySel((j) => s.has(grp[j]), `${[...s].map((k) => meta.groups[k].split(" · ")[1]).join(", ")}`);
-  applySel(() => false, t);
+  const m = matchTaxon(t);
+  if (m) applySel(m.test, m.label); else applySel(() => false, t);
 });
 $("clear").addEventListener("click", () => { $("q").value = ""; clearSel(); });
 addEventListener("keydown", (e) => { if (e.key === "Escape") { $("q").value = ""; clearSel(); } });
-$("vGlobe").addEventListener("click", () => { flat = false; $("vGlobe").setAttribute("aria-pressed", "true"); $("vFlat").setAttribute("aria-pressed", "false"); dirty = true; });
-$("vFlat").addEventListener("click", () => { flat = true; $("vFlat").setAttribute("aria-pressed", "true"); $("vGlobe").setAttribute("aria-pressed", "false"); dirty = true; });
+$("vGlobe").addEventListener("click", () => setView("globe"));
+$("vFlat").addEventListener("click", () => setView("flat"));
+$("vDome").addEventListener("click", () => setView("dome"));
 $("spin").addEventListener("click", () => { spin = !spin; $("spin").setAttribute("aria-pressed", spin ? "true" : "false"); $("spin").textContent = spin ? "Pause spin" : "Spin"; });
 $("lSim").addEventListener("click", () => showLayout("similarity"));
 $("lSculpt").addEventListener("click", () => showLayout("sculpt"));
@@ -669,8 +804,95 @@ async function load() {
   if (!(meta.layouts || []).includes("sculpt")) $("lSculpt").parentElement.parentElement.hidden = true;
   if (!meta.flags) $("cFlag").parentElement.parentElement.hidden = true;
   $("loading").hidden = true; dirty = true;
+  if (show) await initShow();
 }
+// ---------- shows: a keyframed camera path, played in real time or stepped frame by frame (capture_show.js)
+//   ?show=URL            play it (space pauses, left/right step 5 s)        ?show=URL&capture   wait for earthdna.seek(t)
+// { "mode": "dome", "fps": 30, "size": 2048, "morph": 3, "keys": [ { "t": 0, "look": "Cyanobacteria", "zoom": 1, ... } ] }
+// A key holds the time t (s) and whatever changes there; the rest carries over from the key before.
+//   look (a taxon name) or lon, lat (degrees): what is looked at        zoom: 1 = from the centre, n = n times closer
+//   alt: how high above the dome's front horizon it sits (degrees)      roll (degrees)      ease: "smooth" | "linear" (arriving)
+//   size, alpha (points), labels (0..1 opacity): blended between keys   layout, select (taxon name or ""), flags: switch at t
+const matQuat = (m) => {
+  const tr = m[0] + m[4] + m[8]; let w, x, y, z, S;
+  if (tr > 0) { S = Math.sqrt(tr + 1) * 2; w = S / 4; x = (m[7] - m[5]) / S; y = (m[2] - m[6]) / S; z = (m[3] - m[1]) / S; }
+  else if (m[0] > m[4] && m[0] > m[8]) { S = Math.sqrt(1 + m[0] - m[4] - m[8]) * 2; w = (m[7] - m[5]) / S; x = S / 4; y = (m[1] + m[3]) / S; z = (m[2] + m[6]) / S; }
+  else if (m[4] > m[8]) { S = Math.sqrt(1 + m[4] - m[0] - m[8]) * 2; w = (m[2] - m[6]) / S; x = (m[1] + m[3]) / S; y = S / 4; z = (m[5] + m[7]) / S; }
+  else { S = Math.sqrt(1 + m[8] - m[0] - m[4]) * 2; w = (m[3] - m[1]) / S; x = (m[2] + m[6]) / S; y = (m[5] + m[7]) / S; z = S / 4; }
+  return [w, x, y, z];
+};
+const quatMat = ([w, x, y, z]) => [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w), 2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w),
+  2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)];
+function slerp(a, b, u) {
+  let d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]; const sg = d < 0 ? -1 : 1; d = Math.min(1, Math.abs(d));
+  const th = Math.acos(d), sn = Math.sin(th), fa = sn < 1e-5 ? 1 - u : Math.sin((1 - u) * th) / sn, fb = sg * (sn < 1e-5 ? u : Math.sin(u * th) / sn);
+  const q = a.map((v, i) => fa * v + fb * b[i]), l = Math.hypot(...q);
+  return q.map((v) => v / l);
+}
+// where a taxon sits in a layout: its member nearest the centroid, as [lon, lat] in degrees
+function anchorOf(name, layout) {
+  const m = matchTaxon(name, true), L = layouts[layout]; if (!m || !L) return null;
+  const P = (i) => { const lo = L.lon[i] / 65535 * 2 * Math.PI - Math.PI, la = L.lat[i] / 65535 * Math.PI - Math.PI / 2; return [Math.cos(la) * Math.cos(lo), Math.cos(la) * Math.sin(lo), Math.sin(la)]; };
+  const c = [0, 0, 0]; for (let i = 0; i < N; i++) if (m.test(i)) { const p = P(i); c[0] += p[0]; c[1] += p[1]; c[2] += p[2]; }
+  let best = -2, at = null;
+  for (let i = 0; i < N; i++) if (m.test(i)) { const p = P(i), d = p[0] * c[0] + p[1] * c[1] + p[2] * c[2]; if (at === null || d > best) { best = d; at = p; } }
+  return at && [Math.atan2(at[1], at[0]) / RAD, Math.asin(Math.max(-1, Math.min(1, at[2]))) / RAD];
+}
+async function initShow() {
+  const r = await fetch(show.url); if (!r.ok) throw new Error("show file missing");
+  const S = await r.json();
+  if (S.mode === "dome" || show.mode === "dome") setView("dome");
+  let st = { lon: -34, lat: 9, zoom: 1, alt: domeAlt, roll: 0, layout: "similarity", select: "", flags: false, labels: 1, size: dome ? 2.4 : 1.6, alpha: 0.75 };
+  const keys = [];
+  for (const k of S.keys) {
+    const prev = st; st = { ...st, ...k, ease: k.ease || "smooth" };
+    if (!await ensureLayout(st.layout)) { console.warn(`show: no layout "${st.layout}" in this globe`); st.layout = prev.layout; }
+    if (st.flags && !await ensureFlags()) { console.warn("show: this globe has no label checks"); st.flags = false; }
+    if (k.look) { const p = anchorOf(k.look, st.layout); if (p) [st.lon, st.lat] = p; else console.warn(`show: nothing named "${k.look}"`); }
+    if (dome) st.zoom = Math.max(1, st.zoom);
+    domeAlt = st.alt; st.q = matQuat(poseRot(st.lon * RAD, st.lat * RAD, st.roll * RAD));
+    keys.push(st);
+  }
+  keys.sort((a, b) => a.t - b.t);
+  Object.assign(show, { keys, fps: S.fps || 30, size: S.size || 2048, morphDur: S.morph || 3, duration: S.duration || keys[keys.length - 1].t, sel: "", bound: "", indexed: "similarity" });
+  if (document.fonts) await document.fonts.ready;
+  show.ready = true; applyShow(0);
+}
+function applyShow(t) {
+  const K = show.keys; let j = 0; while (j + 1 < K.length && K[j + 1].t <= t) j++;
+  const a = K[j], b = K[j + 1] || a, mix = (x, y) => x + (y - x) * u;
+  let u = b === a ? 0 : Math.max(0, Math.min(1, (t - a.t) / (b.t - a.t)));
+  if (b.ease !== "linear") u = u * u * u * (u * (6 * u - 15) + 10);
+  rot = quatMat(slerp(a.q, b.q, u)); zoom = Math.exp(mix(Math.log(a.zoom), Math.log(b.zoom))); domeAlt = mix(a.alt, b.alt);
+  ov = { size: mix(a.size, b.size), alpha: mix(a.alpha, b.alpha) };
+  $("labels").style.opacity = mix(a.labels, b.labels).toFixed(3);
+  // layout: morph for morphDur seconds from the key where it changed
+  let m = j; while (m > 0 && K[m - 1].layout === a.layout) m--;
+  const mu = m > 0 ? (t - K[m].t) / show.morphDur : 1, from = mu < 1 ? K[m - 1].layout : a.layout;
+  if (show.bound !== from + ">" + a.layout) { bindLayouts(layouts[from], layouts[a.layout]); show.bound = from + ">" + a.layout; }
+  morph = mu < 1 ? { t: mu < 0.5 ? 4 * mu * mu * mu : 1 - Math.pow(-2 * mu + 2, 3) / 2 } : null;
+  if (!morph && show.indexed !== a.layout) { buildIndex(layouts[a.layout].lon, layouts[a.layout].lat); show.indexed = a.layout; }
+  current = a.layout;
+  if (a.select !== show.sel) { show.sel = a.select; const s = a.select && matchTaxon(a.select, true); if (s) applySel(s.test, s.label); else clearSel(); }
+  flagMode = a.flags;
+  draw(); placeLabels(); dirty = false;
+}
+window.earthdna = {
+  // resolves to { fps, size, duration } once the data and the show are loaded
+  ready: () => new Promise((res, rej) => { const w = () => loadError ? rej(new Error(loadError)) : show && show.ready ? res({ fps: show.fps, size: show.size, duration: show.duration }) : setTimeout(w, 100); w(); }),
+  // draw the frame at t seconds; resolves once it is on screen
+  seek: (t) => { applyShow(t); return new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(() => res()))); },
+};
+let loadError = "";
+addEventListener("keydown", (e) => {
+  if (!show || show.capture || !show.ready) return;
+  if (e.key === " ") { show.paused = !show.paused; e.preventDefault(); }
+  if (e.key === "ArrowRight") show.t = Math.min(show.duration, show.t + 5);
+  if (e.key === "ArrowLeft") show.t = Math.max(0, show.t - 5);
+});
+if (Q.has("dome") || (show && show.mode === "dome")) setView("dome");
+if (Q.get("ui") === "0" || show) document.body.classList.add("clean");
 resize(); centreOn(-0.6, 0.15); requestAnimationFrame(frame);
-load().catch((e) => { $("loading").textContent = `The sequence data did not load (${e.message}). Reload the page to try again.`; });
+load().catch((e) => { loadError = e.message; $("loading").textContent = `The sequence data did not load (${e.message}). Reload the page to try again.`; });
 })();
 </script>

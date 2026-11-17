@@ -47,11 +47,31 @@ FASTSNE=/path/to/fastsne pipeline/build.sh $SILVA work 144
 | `pipeline/embed_evo2.py` | any fasta -> Evo 2 layer embeddings as `.fsb` (with `embed_evo2*_grex.sbatch`) |
 | `pipeline/knn_eval.py` | feature tables -> how often nearest neighbours share each rank's label |
 | `pipeline/pilot_sample.py`, `pilot_reads.py` | genus-stratified SSU / labelled nanopore-read sets for comparing features |
-| `viewer/globe.html` | WebGL2 globe: equal-area view, layouts, labels by zoom, search, label conflicts |
+| `viewer/globe.html` | WebGL2 globe: equal-area and dome views, layouts, labels by zoom, search, label conflicts, shows |
+| `viewer/capture_show.js` | a show (`viewer/shows/*.json`) -> dome-master video or PNG frames |
 
 Taxonomic ranks come from SILVA's rank file rather than positions in the path, because eukaryote paths stop at
 whatever node SILVA reached. Species names come from the source-organism field and are kept only when their genus
 agrees with SILVA's (for bacteria the organism is often the host).
+
+## Planetarium dome
+
+The **Dome** view (or `?dome`) puts the viewer inside the sphere and draws an equidistant fisheye, 180 degrees across
+a disc: a dome master, with the front of the dome at the bottom of the frame. The place being looked at sits at the
+front, 40 degrees up (`?dome=ALT` to change it), and zooming moves the camera from the centre of the sphere toward
+it, so nearer points grow and spread overhead. Labels are sized as a fraction of the dome (`&labelScale=1.5`) and
+turned so their tops point at the zenith. `&ui=0` hides the panels, for running it live on a dome.
+
+A show is a list of keyframes (`viewer/shows/dome_test.json`; the format is described above `initShow` in
+`globe.html`): what to look at by taxon name or lon/lat, zoom, layout, selection, point size, label opacity.
+`?show=URL` plays it in real time (space pauses, arrows step 5 s). To render it:
+
+```
+node viewer/capture_show.js work/globe viewer/shows/dome_test.json test.mp4        # H.264, 2048 x 2048, 30 fps
+node viewer/capture_show.js work/globe viewer/shows/dome_test.json frames --size 4096   # PNG sequence
+```
+
+Frames are drawn at show time rather than wall-clock time (about 0.6 s per 2048 x 2048 frame in software WebGL).
 
 ## Placing ASVs
 
