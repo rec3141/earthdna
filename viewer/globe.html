@@ -85,6 +85,12 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px 
 #labels .L3 { font-family: var(--f-taxon); font-style: italic; font-size: 0.82rem; color: #d8e2ec; }
 #labels .L4 { font-family: var(--f-taxon); font-style: italic; font-size: 0.74rem; color: #b9c7d6; }
 #labels.dome span { transform-origin: 0 0; }
+#tlabels, #dlabels { position: absolute; inset: 0; }
+#labels .D0 { font-family: var(--f-taxon); font-style: italic; font-size: 1.15rem; color: #f3e6c4; }
+#labels .D1 { font-size: 0.8rem; font-weight: 500; }
+#labels .D2 { font-family: var(--f-data); font-size: 0.68rem; color: #a9b8c9; }
+select.btn { max-width: 100%; background: rgba(9, 15, 25, 0.9); }
+.row label { font-size: 0.75rem; color: var(--muted); display: inline-flex; gap: 6px; align-items: center; }
 body.clean #head, body.clean #key, body.clean #hint, body.clean #tip { display: none; }
 body.clean { background: #000; cursor: none; }
 #loading { position: fixed; inset: 0; display: grid; place-items: center; z-index: 4; color: var(--muted); font-size: 0.9rem; pointer-events: none; }
@@ -125,6 +131,9 @@ body.clean { background: #000; cursor: none; }
       <button id="cFlag" aria-pressed="false">Label conflicts</button>
     </div>
   </div>
+  <div class="row" id="pschemeRow" hidden><label>Colour points by <select class="btn" id="pscheme"></select></label></div>
+  <div class="row" id="gselRow" hidden><select class="btn" id="gsel" aria-label="Genome"><option value="">Genomes you can open…</option></select></div>
+  <div class="row" id="detRow" hidden><label>Genes <select class="btn" id="gscheme"></select></label><label>Bases <select class="btn" id="bscheme"></select></label></div>
   <form class="row" id="find">
     <input id="q" type="search" placeholder="Find a species, genus, family or phylum" autocomplete="off" aria-label="Find taxon">
     <button class="btn" id="clear" type="button">Clear</button>
@@ -141,7 +150,7 @@ body.clean { background: #000; cursor: none; }
   <ul id="groups"></ul>
 </details>
 
-<div id="labels" aria-hidden="true"></div>
+<div id="labels" aria-hidden="true"><div id="tlabels"></div><div id="dlabels"></div></div>
 <div id="tip" hidden></div>
 <div id="hint">Drag: rotate · Scroll or pinch: zoom<br>Double-click: centre · Esc: clear</div>
 
@@ -193,8 +202,8 @@ vec3 project(vec3 p) {
   return vec3(m * uScale, 1.0);
 }`;
 const ptProg = prog(`#version 300 es
-in vec2 aLL; in vec2 aLL2; in uint aGrp; in uint aSel; in uint aFlag;
-uniform vec3 uCol[128]; uniform float uSize, uAlpha, uHasSel, uMix, uMode;
+in vec2 aLL; in vec2 aLL2; in uint aVa; in uint aVb; in uint aSel; in uint aFlag;
+uniform sampler2D uLut; uniform float uSize, uAlpha, uHasSel, uMix, uMode, uValMix;
 out vec4 vCol;
 ${PROJ}
 void main() {
@@ -210,7 +219,7 @@ void main() {
   bool on = aSel > 0u, flagged = uMode > 0.5 && aFlag > 0u;
   gl_Position = vec4(s.xy, on ? 0.0 : flagged ? 0.25 : 0.5, s.z > 0.5 ? 1.0 : 0.0);
   gl_PointSize = s.z > 0.5 ? uSize * clamp(pow(pDist, -0.6), 0.5, 6.0) * ((on && uHasSel > 0.5) || flagged ? 1.6 : 1.0) : 0.0;
-  vec3 c = uCol[min(aGrp, 127u)];
+  vec3 c = mix(texelFetch(uLut, ivec2(int(aVa), 0), 0).rgb, texelFetch(uLut, ivec2(int(aVb), 1), 0).rgb, uValMix);  // scheme from -> to
   if (uHasSel > 0.5 && !on) vCol = vec4(mix(c, vec3(0.45, 0.52, 0.62), 0.75), uAlpha * 0.18);
   else if (uMode > 0.5) vCol = aFlag == 2u ? vec4(0.96, 0.36, 0.48, 1.0) : aFlag == 1u ? vec4(0.97, 0.75, 0.30, 0.95) : vec4(0.40, 0.48, 0.60, uAlpha * 0.3);
   else vCol = vec4(c, uAlpha);
@@ -337,7 +346,7 @@ function upload(buf) {
   gl.bindVertexArray(ptVao);
   let loc;
   const b2 = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b2); gl.bufferData(gl.ARRAY_BUFFER, grp, gl.STATIC_DRAW);
-  loc = gl.getAttribLocation(ptProg, "aGrp"); gl.enableVertexAttribArray(loc); gl.vertexAttribIPointer(loc, 1, gl.UNSIGNED_BYTE, 0, 0);
+  valBufs.phylum = b2;
   selBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, selBuf); gl.bufferData(gl.ARRAY_BUFFER, sel, gl.DYNAMIC_DRAW);
   loc = gl.getAttribLocation(ptProg, "aSel"); gl.enableVertexAttribArray(loc); gl.vertexAttribIPointer(loc, 1, gl.UNSIGNED_BYTE, 0, 0);
   flagBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, flagBuf); gl.bufferData(gl.ARRAY_BUFFER, new Uint8Array(N), gl.STATIC_DRAW);
@@ -399,7 +408,7 @@ function buildLabels() {
   dirty = true;
 }
 function placeLabels() {
-  const box = $("labels");
+  const box = $("tlabels");
   if (!labelSets.length || morph) { for (const el of labelPool) el.hidden = true; return; }
   if (dome) return placeDomeLabels();
   const w = canvas.clientWidth, h = canvas.clientHeight, sc = scale();
@@ -441,7 +450,7 @@ function placeLabels() {
 // dome labels: centred on their anchor, upright for someone facing them (their tops point at the zenith), sized
 // as a fraction of the dome so a frame of any resolution reads the same
 function placeDomeLabels() {
-  const box = $("labels"), w = canvas.clientWidth, h = canvas.clientHeight, R = Math.min(w, h) / 2;
+  const box = $("tlabels"), w = canvas.clientWidth, h = canvas.clientHeight, R = Math.min(w, h) / 2;
   const k = R / 500 * labelScale, c = cam(), pxPerRad = R / (Math.PI / 2);
   const taken = []; let used = 0;
   const fits = (x0, y0, x1, y1) => { for (const r of taken) if (x0 < r[2] && x1 > r[0] && y0 < r[3] && y1 > r[1]) return false; return true; };
@@ -544,26 +553,35 @@ function draw() {
   const size = ov ? ov.size : +$("size").value;
   // dome: sized as a fraction of the disc (so any frame resolution looks the same); nearness enlarges points in the shader
   gl.uniform1f(gl.getUniformLocation(ptProg, "uSize"), dome ? size * Math.min(canvas.width, canvas.height) / 900 : size * dpr * Math.pow(zoom, 0.45));
-  gl.uniform1f(gl.getUniformLocation(ptProg, "uAlpha"), ov ? ov.alpha : +$("alpha").value);
+  // an open fragment dims the map behind it
+  gl.uniform1f(gl.getUniformLocation(ptProg, "uAlpha"), (ov ? ov.alpha : +$("alpha").value) * (det ? (1 - 0.85 * smooth(det.depth)) * (1 - 0.7 * smooth((det.depth - 1) / 0.5)) : 1));
   gl.uniform1f(gl.getUniformLocation(ptProg, "uHasSel"), hasSel ? 1 : 0);
   gl.uniform1f(gl.getUniformLocation(ptProg, "uMode"), flagMode ? 1 : 0);
   gl.uniform1f(gl.getUniformLocation(ptProg, "uMix"), morph ? morph.t : 0);
-  gl.uniform3fv(gl.getUniformLocation(ptProg, "uCol[0]"), cols);
+  bindPointSchemes();
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, lutTex); gl.uniform1i(gl.getUniformLocation(ptProg, "uLut"), 0);
+  gl.uniform1f(gl.getUniformLocation(ptProg, "uValMix"), sch.points.t);
   gl.drawArrays(gl.POINTS, 0, N);
+  drawDetail();
 }
 let last = performance.now();
 function frame(t) {
   const dt = Math.min(0.1, (t - last) / 1000); last = t;
   if (show) { if (!show.capture && show.ready) { if (!show.paused) show.t = (show.t + dt) % show.duration; applyShow(show.t); } requestAnimationFrame(frame); return; }
   // dome: the sky turns about the zenith, slowly (fast motion overhead is uncomfortable)
-  if (spin && !dragging) { rot = mul(dome ? rotZ(0.02 * dt / Math.sqrt(zoom)) : rotY(0.06 * dt / Math.sqrt(zoom)), rot); dirty = true; }
+  if (spin && !dragging && !det) { rot = mul(dome ? rotZ(0.02 * dt / Math.sqrt(zoom)) : rotY(0.06 * dt / Math.sqrt(zoom)), rot); dirty = true; }
   if (morph) {
     const u = Math.min(1, (t - morph.t0) / morph.dur);
     morph.t = u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2;
     dirty = true;
     if (u >= 1) { const L = morph.to; morph = null; bindLayouts(L, L); buildIndex(L.lon, L.lat); }
   }
-  if (dirty) { draw(); placeLabels(); dirty = false; }
+  for (let k = tweens.length - 1; k >= 0; k--) {
+    const w = tweens[k], u = Math.min(1, (t - w.t0) / w.dur);
+    w.fn(u * u * (3 - 2 * u)); dirty = true;
+    if (u >= 1) { tweens.splice(k, 1); if (w.done) w.done(); }
+  }
+  if (dirty) { draw(); placeLabels(); placeDetLabels(); dirty = false; }
   requestAnimationFrame(frame);
 }
 
@@ -576,7 +594,7 @@ canvas.addEventListener("pointerdown", (e) => {
   dragging = true; moved = 0; lastP = [e.clientX, e.clientY]; canvas.classList.add("dragging"); $("tip").hidden = true;
 });
 canvas.addEventListener("pointermove", (e) => {
-  if (!pointers.has(e.pointerId)) { hover(e.clientX, e.clientY); return; }
+  if (!pointers.has(e.pointerId)) { if (det) detHover(e.clientX, e.clientY); else hover(e.clientX, e.clientY); return; }
   const prev = pointers.get(e.pointerId); pointers.set(e.pointerId, [e.clientX, e.clientY]);
   if (pointers.size === 2) {
     const [a, b] = [...pointers.values()], o = [...pointers.entries()].find(([k]) => k !== e.pointerId)[1];
@@ -587,6 +605,10 @@ canvas.addEventListener("pointermove", (e) => {
   const dx = e.clientX - lastP[0], dy = e.clientY - lastP[1]; lastP = [e.clientX, e.clientY];
   moved += Math.abs(dx) + Math.abs(dy);
   if (moved > 3) stopSpin();
+  if (det) {  // an open fragment: drag along the sequence
+    const P = detP(); if (P && det.depth > 1.05) { det.focus = Math.max(0, Math.min(det.len, det.focus - dx / (P.s * P.pxPerRad))); dirty = true; }
+    return;
+  }
   if (dome) {  // take hold of the sky: the point under the pointer stays under it
     const a = screenToView(e.clientX - dx, e.clientY - dy), b = screenToView(e.clientX, e.clientY);
     if (a && b) { rot = mul(rotBetween(a, b), rot); dirty = true; }
@@ -599,7 +621,10 @@ function endPointer(e) {
   pointers.delete(e.pointerId);
   if (pointers.size === 0) {
     dragging = false; canvas.classList.remove("dragging");
-    if (moved < 4 && e.type === "pointerup") pickGenus(e.clientX, e.clientY);
+    if (moved < 4 && e.type === "pointerup") {
+      if (det) { const h = detPick(e.clientX, e.clientY); if (h && h.gene) gotoGene(h.gene); }
+      else pickGenus(e.clientX, e.clientY);
+    }
   } else lastP = [...pointers.values()][0];
 }
 canvas.addEventListener("pointerup", endPointer); canvas.addEventListener("pointercancel", endPointer);
@@ -623,8 +648,26 @@ function screenToView(cx, cy) {
   hitDist = t;
   return [c[0] + t * d[0], c[1] + t * d[1], c[2] + t * d[2]];
 }
+function detHover(cx, cy) {
+  const h = detPick(cx, cy), tip = $("tip");
+  if (!h) { tip.hidden = true; return; }
+  tip.innerHTML = `<div class="g"></div><div></div><div class="m"></div>`;
+  const pos = det.start + Math.floor(h.x);
+  if (h.gene) { const ge = h.gene; tip.children[0].textContent = ge[5] || ge[4]; tip.children[1].textContent = ge[6]; tip.children[2].textContent = `${ge[4]} · ${(ge[1] + 1).toLocaleString()}–${ge[2].toLocaleString()} (${ge[3] < 0 ? "−" : "+"}) · ${(ge[2] - ge[1]).toLocaleString()} bp`; }
+  else { tip.children[0].textContent = det.code && det.depth > 1.5 ? "ACGTN"[det.code[Math.floor(h.x)]] : ""; tip.children[2].textContent = `${det.g.contigs[det.ci].id} : ${(pos + 1).toLocaleString()}`; }
+  tip.style.left = cx + "px"; tip.style.top = cy + "px"; tip.style.transform = "translate(14px, 14px)"; tip.hidden = false;
+}
+canvas.addEventListener("wheel", (e) => {
+  if (!det) return;
+  e.preventDefault(); e.stopImmediatePropagation();
+  if (tweens.length) return;
+  det.depth = Math.max(0, Math.min(2.1, det.depth - e.deltaY * 0.0012)); dirty = true;
+  if (det.depth <= 0.01) { det = null; $("detRow").hidden = true; }
+}, { passive: false });
 canvas.addEventListener("wheel", (e) => { e.preventDefault(); setZoom(zoom * Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
 canvas.addEventListener("dblclick", (e) => {
+  if (det) { const h = detPick(e.clientX, e.clientY); if (h) gotoGene(null, h.x); return; }
+  const hit = nearest(e.clientX, e.clientY); if (hit >= 0 && openDetail(hit)) return;
   const p = screenToWorld(e.clientX, e.clientY); if (!p) return;
   stopSpin(); centreOn(Math.atan2(p[1], p[0]), Math.asin(Math.max(-1, Math.min(1, p[2])))); setZoom(zoom * 1.6);
 });
@@ -736,7 +779,18 @@ $("find").addEventListener("submit", (e) => {
   if (m) applySel(m.test, m.label); else applySel(() => false, t);
 });
 $("clear").addEventListener("click", () => { $("q").value = ""; clearSel(); });
-addEventListener("keydown", (e) => { if (e.key === "Escape") { $("q").value = ""; clearSel(); } });
+addEventListener("keydown", (e) => { if (e.key === "Escape") { if (det) closeDetail(); else { $("q").value = ""; clearSel(); } } });
+$("gsel").addEventListener("change", () => {
+  const g = genomes[$("gsel").value]; if (!g) { clearSel(); return; }
+  activeGroups.clear(); syncKey();
+  applySel((j) => pointFrag.has(j) && pointFrag.get(j).g === g, g.name);
+  const i = g.points[0][0], L = layouts[current]; stopSpin();
+  centreOn(L.lon[i] / 65535 * 2 * Math.PI - Math.PI, L.lat[i] / 65535 * Math.PI - Math.PI / 2);
+  $("status").textContent = `${g.name}: ${g.points.length} fragments on the map. Double-click one to open it.`;
+});
+$("pscheme").addEventListener("change", async () => { const n = $("pscheme").value; if (await ensurePointScheme(n)) setScheme("points", n); });
+$("gscheme").addEventListener("change", () => setScheme("genes", $("gscheme").value));
+$("bscheme").addEventListener("change", () => setScheme("bases", $("bscheme").value));
 $("vGlobe").addEventListener("click", () => setView("globe"));
 $("vFlat").addEventListener("click", () => setView("flat"));
 $("vDome").addEventListener("click", () => setView("dome"));
@@ -803,9 +857,396 @@ async function load() {
   if (meta.title) $("src").textContent = meta.title;
   if (!(meta.layouts || []).includes("sculpt")) $("lSculpt").parentElement.parentElement.hidden = true;
   if (!meta.flags) $("cFlag").parentElement.parentElement.hidden = true;
+  for (const c of meta.colors || []) if (!SCHEMES.points[c.name]) SCHEMES.points[c.name] = {};
+  await loadGenomes();
+  for (const u of ["schemes.json", Q.get("schemes")]) if (u) { const r = await fetch(u).catch(() => null); if (r && r.ok) addSchemes(await r.json()); }
+  fillSchemeMenus();
   $("loading").hidden = true; dirty = true;
   if (show) await initShow();
 }
+// ---------- colour schemes: how points, genes and bases are coloured. Built-ins below; more come from
+// schemes.json beside the data, ?schemes=URL, or a show's "schemes". Changing scheme cross-fades.
+//   points: { color: NAME of a pack_globe.py --color set, ramp: [hex...], domain: [lo, hi] } or { colors: { label: hex } }
+//   genes:  { by: "type" | "strand", colors: {...} }  { by: "gc", ramp, domain }
+//           { by: "match", rules: [{ match: "regex on name + product", color, label }], else: hex }
+//           { by: "attr", attr: "cog", colors: {...} }   { by: "values", values: { locus_tag or name: number | hex }, ramp, domain }
+//   bases:  { by: "base", colors: { A, C, G, T, N } }  { by: "gc", window: 100, ramp, domain }
+//           { by: "motif", rules: [{ motif: "regex", color }], else: hex }
+const GC_RAMP = ["#2166ac", "#67a9cf", "#d1e5f0", "#fddbc7", "#ef8a62", "#b2182b"];
+const SCHEMES = {
+  points: { phylum: {} },
+  genes: {
+    type: { by: "type", colors: { CDS: "#5b8fd9", rRNA: "#f0c35a", tRNA: "#58c78a", tmRNA: "#58c78a", ncRNA: "#41c8c8", pseudogene: "#7b8798", repeat_region: "#b28df2", mobile_genetic_element: "#e8595f", CRISPR: "#f07ab8" }, else: "#8797ab" },
+    strand: { by: "strand", colors: { "+": "#4e9bf0", "-": "#f2994a" } },
+    gc: { by: "gc", ramp: GC_RAMP, domain: [0.3, 0.7] },
+  },
+  bases: {
+    base: { by: "base", colors: { A: "#58c78a", C: "#4e9bf0", G: "#f2d35a", T: "#e8595f", N: "#56657a" } },
+    gc: { by: "gc", window: 100, ramp: GC_RAMP, domain: [0.3, 0.7] },
+  },
+};
+const sch = { points: { from: "phylum", to: "phylum", t: 1 }, genes: { from: "type", to: "type", t: 1 }, bases: { from: "base", to: "base", t: 1 } };
+const GREY = [0.34, 0.40, 0.48];
+const rgbOf = (c) => !c ? GREY : typeof c === "string" ? hex(c) : c;
+function ramp(stops, t) {
+  t = Math.max(0, Math.min(1, t)) * (stops.length - 1);
+  const i = Math.min(stops.length - 2, Math.floor(t)), f = t - i, a = hex(stops[i]), b = hex(stops[i + 1]);
+  return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+}
+const scaled = (def, v) => ramp(def.ramp || GC_RAMP, (v - (def.domain ? def.domain[0] : 0)) / ((def.domain ? def.domain[1] - def.domain[0] : 1) || 1));
+const mix3 = (a, b, t) => t <= 0 ? a : t >= 1 ? b : [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+const smooth = (x) => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
+function addSchemes(S) { for (const k of ["points", "genes", "bases"]) Object.assign(SCHEMES[k], (S || {})[k] || {}); fillSchemeMenus(); }
+function fillSchemeMenus() {
+  for (const [id, k] of [["pscheme", "points"], ["gscheme", "genes"], ["bscheme", "bases"]]) {
+    const el = $(id), names = Object.keys(SCHEMES[k]).filter((n) => k !== "points" || n === "phylum" || pointInfo(n));
+    el.textContent = ""; for (const n of names) { const o = document.createElement("option"); o.value = o.textContent = n; el.appendChild(o); }
+    el.value = sch[k].to;
+  }
+  $("pschemeRow").hidden = $("pscheme").options.length < 2;
+}
+function setScheme(kind, name, instant) {
+  if (!SCHEMES[kind][name] || sch[kind].to === name) return;
+  const s = sch[kind]; s.from = s.to; s.to = name; s.t = instant ? 1 : 0;
+  if (!instant) tween(900, (u) => { s.t = u; });
+  dirty = true;
+}
+
+// points: one byte per point per scheme, coloured through a 256-entry table (row 0: from, row 1: to)
+const valBufs = {};
+let lutTex = null, lutKey = "";
+const pointInfo = (name) => meta && (meta.colors || []).find((c) => c.name === ((SCHEMES.points[name] || {}).color || name));
+async function ensurePointScheme(name) {
+  if (valBufs[name]) return true;
+  const info = pointInfo(name); if (!info) return false;
+  if (!valBufs["@" + info.name]) {
+    const r = await fetch(`color_${info.name}.b64.txt`); if (!r.ok) return false;
+    const bin = atob((await r.text()).trim()), b = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
+    const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, b, gl.STATIC_DRAW);
+    valBufs["@" + info.name] = buf;
+  }
+  valBufs[name] = valBufs["@" + info.name];
+  if (!SCHEMES.points[name]) SCHEMES.points[name] = {};
+  return true;
+}
+function pointLut(name) {
+  const out = new Uint8Array(256 * 4), def = SCHEMES.points[name] || {}, info = pointInfo(name);
+  for (let c = 0; c < 256; c++) {
+    let col = rgbOf(def.missing);
+    if (name === "phylum") col = c < 128 ? [cols[3 * c], cols[3 * c + 1], cols[3 * c + 2]] : GREY;
+    else if (info && c < 255) {
+      if (info.kind === "continuous") col = ramp(def.ramp || GC_RAMP, ((info.min + c / 254 * (info.max - info.min)) - (def.domain ? def.domain[0] : info.min)) / (((def.domain ? def.domain[1] : info.max) - (def.domain ? def.domain[0] : info.min)) || 1));
+      else if (c < info.labels.length) col = def.colors && def.colors[info.labels[c]] ? hex(def.colors[info.labels[c]]) : def.colors ? rgbOf(def.else) : hex(PALETTE[c % PALETTE.length]);
+    }
+    out.set([col[0] * 255, col[1] * 255, col[2] * 255, 255], 4 * c);
+  }
+  return out;
+}
+function bindPointSchemes() {
+  const s = sch.points, key = s.from + ">" + s.to;
+  if (key === lutKey || !valBufs[s.from] || !valBufs[s.to]) return;
+  lutKey = key;
+  gl.bindVertexArray(ptVao);
+  for (const [attr, name] of [["aVa", s.from], ["aVb", s.to]]) {
+    const loc = gl.getAttribLocation(ptProg, attr);
+    gl.bindBuffer(gl.ARRAY_BUFFER, valBufs[name]); gl.enableVertexAttribArray(loc); gl.vertexAttribIPointer(loc, 1, gl.UNSIGNED_BYTE, 0, 0);
+  }
+  const px = new Uint8Array(256 * 2 * 4); px.set(pointLut(s.from), 0); px.set(pointLut(s.to), 1024);
+  if (!lutTex) lutTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, lutTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 256, 2, 0, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+}
+
+// ---------- genomes: a fragment (one point) opens into a loop of its genes, and on into its sequence.
+// det.depth runs 0 (the point) -> 1 (the loop: the 10 kb fragment bent into an open ring) -> 2 (bases you can read).
+// Everything is laid out in "scene radians" about the place being looked at and mapped to the screen by sceneMap, so
+// on a dome the loop hangs at the front and the sequence runs along a circle of constant altitude.
+const genomes = {}, pointFrag = new Map(), tweens = [];
+let det = null, labelOp = 1;  // labelOp: a show's opacity for the taxon names
+function tween(dur, fn, done) { tweens.push({ t0: performance.now(), dur, fn, done }); }
+async function loadGenomes() {
+  const r = await fetch("genomes.json").catch(() => null); if (!r || !r.ok) return;
+  for (const e of await r.json()) {
+    const gr = await fetch(`genome_${e.acc}.json`); if (!gr.ok) continue;
+    const g = await gr.json(); genomes[g.acc] = g;
+    for (const [pt, ci, start] of g.points) pointFrag.set(pt, { g, point: pt, ci, start });
+    const o = document.createElement("option"); o.value = g.acc; o.textContent = `${g.name} (${g.points.length})`; $("gsel").appendChild(o);
+  }
+  $("gselRow").hidden = !Object.keys(genomes).length;
+}
+function ensureSeq(g) {
+  if (!g.seqP) g.seqP = fetch(`genome_${g.acc}.seq.txt`).then((r) => r.ok ? r.text() : "").then((t) => { g.seq = t.trim(); if (det && det.g === g) setDet(det, det.depth); return !!g.seq; });
+  return g.seqP;
+}
+// a show's "fragment": "ACC" or "ACC:contig:start", narrowed by a gene (regex on name + product)
+function findFrag(spec, gene) {
+  const [acc, contig, st] = spec.split(":"), g = genomes[acc]; if (!g) return null;
+  const ci = contig === undefined ? -1 : g.contigs.findIndex((c) => c.id === contig);
+  const cand = g.points.filter((p) => contig === undefined || (p[1] === ci && (st === undefined || p[2] === +st)));
+  const mk = (p, focus) => ({ g, point: p[0], ci: p[1], start: p[2], focus });
+  if (gene) {
+    const rx = new RegExp(gene, "i");
+    for (const ge of g.genes) if (rx.test(ge[5] + " " + ge[6])) { const mid = (ge[1] + ge[2]) / 2, p = cand.find((p) => p[1] === ge[0] && mid >= p[2] && mid < p[2] + g.frag); if (p) return mk(p, mid - p[2]); }
+    return contig === undefined ? null : findFrag(acc, gene);
+  }
+  return cand.length ? mk(cand[0], g.frag / 2) : null;
+}
+// the open fragment's genes, base codes and running base counts
+function setDet(f, depth, focus) {
+  if (!det || det.point !== f.point) { det = { ...f, key: "" }; ensureSeq(f.g); }
+  det.depth = depth; if (focus !== undefined) det.focus = Math.max(0, Math.min(f.g.frag, focus));
+  if (det.key !== f.point + ":" + !!f.g.seq) {
+    const g = det.g, F = g.frag, c = g.contigs[det.ci];
+    det.key = f.point + ":" + !!g.seq;
+    det.genes = g.genes.filter((ge) => ge[0] === det.ci && ge[2] > det.start && ge[1] < det.start + F);
+    det.len = Math.min(F, c.len - det.start);
+    det.code = null;
+    if (g.seq) {
+      const s = g.seq.substr(c.off + det.start, F), code = new Uint8Array(F).fill(4), cum = [0, 1, 2, 3].map(() => new Int32Array(F + 1));
+      for (let i = 0; i < s.length; i++) { const k = "ACGT".indexOf(s[i]); code[i] = k < 0 ? 4 : k; for (let b = 0; b < 4; b++) cum[b][i + 1] = cum[b][i] + (k === b ? 1 : 0); }
+      for (let i = s.length; i < F; i++) for (let b = 0; b < 4; b++) cum[b][i + 1] = cum[b][i];
+      det.code = code; det.cum = cum; det.str = s; det.motifs = {};
+    }
+  }
+  dirty = true;
+}
+const SPAN = 300 * RAD, R1 = 0.38, S2 = 0.03;  // the loop's arc, its radius at depth 1, radians per base at depth 2
+function detP() {
+  if (!det || det.depth <= 0.001) return null;
+  const d = det.depth, F = det.g.frag, s1 = R1 * SPAN / F;
+  const R = d < 1 ? R1 * (0.015 + 0.985 * smooth(d)) : s1 * Math.pow(S2 / s1, d - 1) * F / SPAN, s = R * SPAN / F;
+  const a = smooth((d - 1) / 0.35), phi0 = (det.focus / F - 0.5) * SPAN;
+  const Tg0 = Math.min(0.14 * R, 0.07), Ts = Math.max(0.32 * Tg0, s * 1.3), Tg = Tg0 + (0.022 - Tg0) * smooth((d - 1.4) / 0.5);
+  const w = canvas.clientWidth, h = canvas.clientHeight, m = Math.min(w, h);
+  const K = dome ? 1 : 1.6, pxPerRad = dome ? m / Math.PI : K * m / 2, umax = dome ? 1.5 : w / m / K + 0.1;
+  const phi = (x) => (x / F - 0.5) * SPAN - a * phi0;
+  return { d, F, R, s, a, phi0, Ts, Tg, Rg: R + Ts / 2 + 0.18 * Ts + Tg / 2, K, pxPerRad, umax, phi, alpha: smooth(d / 0.35),
+    pt: (x, rad) => { const p = phi(x); return [rad * Math.sin(p), rad * Math.cos(p) - a * R]; },
+    lo: a >= 1 && R * SPAN / 2 > umax + 0.3 ? Math.max(0, det.focus - (umax + 0.3) / s) : 0,
+    hi: a >= 1 && R * SPAN / 2 > umax + 0.3 ? Math.min(F, det.focus + (umax + 0.3) / s) : F };
+}
+function sceneMap(u, v) {  // scene radians -> clip xy
+  const w = canvas.clientWidth, h = canvas.clientHeight, m = Math.min(w, h);
+  if (dome) {
+    const alt = Math.min(Math.PI / 2, domeAlt * RAD + v), az = u / Math.max(0.15, Math.cos(alt)), r = 1 - alt / (Math.PI / 2);
+    return [r * Math.sin(az) * m / w, -r * Math.cos(az) * m / h];
+  }
+  return [u * 1.6 * m / w, v * 1.6 * m / h];
+}
+function sceneUnmap(cx, cy) {  // client px -> scene radians
+  const r = canvas.getBoundingClientRect(), m = Math.min(r.width, r.height);
+  const x = ((cx - r.left) / r.width * 2 - 1) * r.width / m, y = (1 - (cy - r.top) / r.height * 2) * r.height / m;
+  if (!dome) return [x / 1.6, y / 1.6];
+  const alt = (1 - Math.hypot(x, y)) * Math.PI / 2;
+  return [Math.atan2(x, -y) * Math.max(0.15, Math.cos(alt)), alt - domeAlt * RAD];
+}
+// what is under the pointer in the open fragment: { x: base offset, gene, onSeq }
+function detPick(cx, cy) {
+  const P = detP(); if (!P) return null;
+  const [u, v] = sceneUnmap(cx, cy), dv = v + P.a * P.R, rad = Math.hypot(u, dv);
+  const x = ((Math.atan2(u, dv) + P.a * P.phi0) / SPAN + 0.5) * P.F;
+  if (x < 0 || x > P.F) return null;
+  const pad = 6 / P.pxPerRad, pos = det.start + x;
+  const gene = Math.abs(rad - P.Rg) < P.Tg / 2 + pad ? det.genes.find((ge) => pos >= ge[1] && pos < ge[2]) : null;
+  const onSeq = Math.abs(rad - P.R) < P.Ts / 2 + pad;
+  return gene || onSeq ? { x, gene, onSeq } : null;
+}
+function geneCol(name, ge) {
+  const def = SCHEMES.genes[name] || {}, text = ge[5] + " " + ge[6];
+  if (def.by === "type") return rgbOf((def.colors || {})[ge[4]] || def.else);
+  if (def.by === "strand") return rgbOf((def.colors || {})[ge[3] < 0 ? "-" : "+"]);
+  if (def.by === "gc") {
+    if (!det.g.seq) return GREY;
+    if (ge.gc === undefined) { const s = det.g.seq.substring(det.g.contigs[ge[0]].off + ge[1], det.g.contigs[ge[0]].off + ge[2]); let n = 0; for (let i = 0; i < s.length; i++) if (s[i] === "G" || s[i] === "C") n++; ge.gc = n / Math.max(1, s.length); }
+    return scaled(def, ge.gc);
+  }
+  if (def.by === "match") {
+    for (const r of def.rules || []) { r.rx = r.rx || new RegExp(r.match, "i"); if (r.rx.test(text)) return rgbOf(r.color); }
+    return rgbOf(def.else);
+  }
+  let v;
+  if (def.by === "attr") v = (ge[7] || {})[def.attr];
+  else if (def.by === "values") v = def.values[(ge[7] || {}).locus_tag] ?? def.values[ge[5]];
+  if (v === undefined || v === "") return rgbOf(def.else);
+  if (def.colors) return rgbOf(def.colors[v] || def.else);
+  if (typeof v === "string" && v[0] === "#") return hex(v);
+  if (!isNaN(+v)) return scaled(def, +v);
+  let hsh = 0; for (let i = 0; i < v.length; i++) hsh = (hsh * 31 + v.charCodeAt(i)) >>> 0;
+  return hex(PALETTE[hsh % PALETTE.length]);
+}
+function baseCol(name, x0, x1) {  // colour of bases [x0, x1) of the open fragment
+  const def = SCHEMES.bases[name] || {}, cum = det.cum;
+  if (def.by === "gc") {
+    const w = Math.max(x1 - x0, def.window || 100), c = (x0 + x1) / 2, a = Math.max(0, Math.round(c - w / 2)), b = Math.min(det.len, Math.round(c + w / 2));
+    return b > a ? scaled(def, (cum[1][b] - cum[1][a] + cum[2][b] - cum[2][a]) / (b - a)) : GREY;
+  }
+  if (def.by === "motif") {
+    let m = det.motifs[name];
+    if (!m) {  // paint each rule's matches once
+      m = det.motifs[name] = { ix: new Uint8Array(det.F || det.g.frag), cols: [rgbOf(def.else || "#3a4658")] };
+      (def.rules || []).forEach((r, k) => { m.cols.push(rgbOf(r.color)); const rx = new RegExp(r.motif, "gi"); let h; while ((h = rx.exec(det.str))) { m.ix.fill(k + 1, h.index, h.index + Math.max(1, h[0].length)); if (!h[0].length) rx.lastIndex++; } });
+    }
+    const acc = [0, 0, 0]; for (let x = x0; x < x1; x++) { const c = m.cols[m.ix[x]]; acc[0] += c[0]; acc[1] += c[1]; acc[2] += c[2]; }
+    return acc.map((v) => v / Math.max(1, x1 - x0));
+  }
+  const colors = def.colors || SCHEMES.bases.base.colors, n = Math.max(1, x1 - x0), acc = [0, 0, 0]; let seen = 0;
+  for (let b = 0; b < 4; b++) { const k = cum[b][x1] - cum[b][x0]; if (!k) continue; const c = rgbOf(colors["ACGT"[b]]); seen += k; acc[0] += c[0] * k; acc[1] += c[1] * k; acc[2] += c[2] * k; }
+  if (seen < n) { const c = rgbOf(colors.N); acc[0] += c[0] * (n - seen); acc[1] += c[1] * (n - seen); acc[2] += c[2] * (n - seen); }
+  return acc.map((v) => v / n);
+}
+const detProg = prog(`#version 300 es
+in vec2 aP; in vec4 aC; in vec2 aT; out vec4 vC; out vec2 vT;
+void main() { vC = aC; vT = aT; gl_Position = vec4(aP, 0.0, 1.0); }`, `#version 300 es
+precision mediump float;
+in vec4 vC; in vec2 vT; out vec4 o; uniform sampler2D uAtlas;
+void main() { o = vec4(vC.rgb, vC.a * (vT.x < 0.0 ? 1.0 : texture(uAtlas, vT).a)); }`);
+const detVao = gl.createVertexArray(), detBuf = gl.createBuffer();
+gl.bindVertexArray(detVao); gl.bindBuffer(gl.ARRAY_BUFFER, detBuf);
+[["aP", 2, 0], ["aC", 4, 8], ["aT", 2, 24]].forEach(([n, k, off]) => { const loc = gl.getAttribLocation(detProg, n); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, k, gl.FLOAT, false, 32, off); });
+const atlas = gl.createTexture();
+function makeAtlas() {  // A C G T N, white on clear, 64 px cells
+  const c = document.createElement("canvas"); c.width = 320; c.height = 64;
+  const x = c.getContext("2d"); x.fillStyle = "#fff"; x.textAlign = "center"; x.textBaseline = "middle"; x.font = '600 50px "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace';
+  [..."ACGTN"].forEach((ch, i) => x.fillText(ch, 32 + 64 * i, 35));
+  gl.bindTexture(gl.TEXTURE_2D, atlas); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+  gl.generateMipmap(gl.TEXTURE_2D); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  dirty = true;
+}
+makeAtlas(); if (document.fonts) document.fonts.load('600 50px "JetBrains Mono"').then(makeAtlas, () => {});
+const BINS = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000];
+function drawDetail() {
+  const P = detP(); if (!P) return;
+  const V = [], al0 = P.alpha;
+  const vert = (p, c, al, tu, tv) => { const q = sceneMap(p[0], p[1]); V.push(q[0], q[1], c[0], c[1], c[2], al, tu, tv); };
+  const quad = (p0, p1, p2, p3, c, al, t) => {  // inner-left, inner-right, outer-right, outer-left
+    if (Math.abs(p0[0]) > P.umax && Math.abs(p1[0]) > P.umax) return;
+    const [u0, u1] = t || [-1, -1];
+    vert(p0, c, al, u0, t ? 1 : -1); vert(p1, c, al, u1, t ? 1 : -1); vert(p2, c, al, u1, t ? 0 : -1);
+    vert(p0, c, al, u0, t ? 1 : -1); vert(p2, c, al, u1, t ? 0 : -1); vert(p3, c, al, u0, t ? 0 : -1);
+  };
+  // a band along bases [x0, x1) at radius rc, th thick; taper: +1 narrows to a point at x1, -1 at x0 (a gene's arrow)
+  const band = (x0, x1, rc, th, c, al, taper, tl) => {
+    x0 = Math.max(x0, P.lo - 1); x1 = Math.min(x1, P.hi + 1); if (x1 <= x0) return;
+    const n = Math.max(1, Math.min(600, Math.ceil((x1 - x0) * P.s / 0.03)));
+    const f = (x) => !taper ? 1 : taper > 0 ? Math.min(1, (x1 - x) / tl) : Math.min(1, (x - x0) / tl);
+    let xa = x0, fa = f(xa), ia = P.pt(xa, rc - th * fa / 2), oa = P.pt(xa, rc + th * fa / 2);
+    for (let k = 1; k <= n; k++) {
+      const xb = x0 + (x1 - x0) * k / n, fb = f(xb), ib = P.pt(xb, rc - th * fb / 2), ob = P.pt(xb, rc + th * fb / 2);
+      quad(ia, ib, ob, oa, c, al); xa = xb; ia = ib; oa = ob;
+    }
+  };
+  const c = det.g.contigs[det.ci], end = det.len, ink = [0.55, 0.62, 0.72];
+  // the contig running on past either end of the fragment: the loop is open
+  if (det.start > 0) band(-0.035 * P.F, 0, P.R, 0.004 + 0.1 * P.Ts, ink, 0.35 * al0);
+  if (det.start + P.F < c.len) band(P.F, 1.035 * P.F, P.R, 0.004 + 0.1 * P.Ts, ink, 0.35 * al0);
+  // sequence track: bins that shrink to single bases, the finer size fading in over the coarser
+  const cellPx = P.s * P.pxPerRad, want = 3.5 / cellPx;
+  if (!det.code) band(0, end, P.R, P.Ts, GREY, 0.6 * al0);
+  else {
+    let li = BINS.findIndex((b) => b >= want); if (li < 0) li = BINS.length - 1;
+    const layers = [[BINS[li], 1]]; if (li > 0) layers.push([BINS[li - 1], smooth((BINS[li] - want) / (BINS[li] - BINS[li - 1]))]);
+    const sb = sch.bases;
+    for (const [L, la] of layers) {
+      if (la <= 0) continue;
+      for (let x = Math.floor(P.lo / L) * L; x < Math.min(end, P.hi); x += L) {
+        const x1 = Math.min(end, x + L);
+        band(x, x1, P.R, P.Ts, mix3(baseCol(sb.from, x, x1), baseCol(sb.to, x, x1), sb.t), la * al0);
+      }
+    }
+    const la = smooth((cellPx - 6) / 6);
+    if (la > 0) for (let x = Math.floor(P.lo); x < Math.min(end, P.hi); x++) {
+      const g = det.code[x], t = [g / 5 + 0.004, (g + 1) / 5 - 0.004], h = P.Ts * 0.42;
+      quad(P.pt(x, P.R - h), P.pt(x + 1, P.R - h), P.pt(x + 1, P.R + h), P.pt(x, P.R + h), [0.03, 0.05, 0.09], la * al0, t);
+    }
+  }
+  // genes: arrows on the outer track
+  const sg = sch.genes;
+  band(0, end, P.Rg, Math.max(0.0025, 0.06 * P.Tg), ink, 0.5 * al0);
+  for (const ge of det.genes) {
+    const x0 = Math.max(0, ge[1] - det.start), x1 = Math.min(end, ge[2] - det.start), col = mix3(geneCol(sg.from, ge), geneCol(sg.to, ge), sg.t);
+    const tip = ge[3] > 0 ? ge[2] - det.start <= end : ge[1] - det.start >= 0;  // the gene's 3' end is in this fragment
+    band(x0, x1, P.Rg, P.Tg, col, 0.95 * al0, tip ? ge[3] : 0, Math.min((x1 - x0) * 0.45, 0.7 * P.Tg / P.s));
+  }
+  // coordinate ticks inside the loop
+  for (const x of detTicks(P)) band(x - 0.6 / cellPx, x + 0.6 / cellPx, P.R - P.Ts / 2 - 0.25 * P.Ts - 0.004, 0.008 + 0.3 * P.Ts, ink, 0.7 * al0);
+  gl.disable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  gl.useProgram(detProg); gl.bindVertexArray(detVao); gl.bindBuffer(gl.ARRAY_BUFFER, detBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(V), gl.DYNAMIC_DRAW);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, atlas); gl.uniform1i(gl.getUniformLocation(detProg, "uAtlas"), 1); gl.activeTexture(gl.TEXTURE0);
+  gl.drawArrays(gl.TRIANGLES, 0, V.length / 8);
+}
+function detTicks(P) {
+  const raw = 130 / (P.s * P.pxPerRad), p10 = Math.pow(10, Math.floor(Math.log10(raw))), step = Math.max(1, [1, 2, 5, 10].find((k) => k * p10 >= raw) * p10);
+  const out = []; for (let x = Math.ceil((det.start + P.lo) / step) * step - det.start; x <= Math.min(det.len, P.hi); x += step) out.push(x);
+  return out;
+}
+// names: the genome in the middle of the loop, genes outside it, coordinates inside
+const detPool = [];
+function placeDetLabels() {
+  const box = $("dlabels"), P = detP(); let used = 0;
+  if (P) {
+    const w = canvas.clientWidth, h = canvas.clientHeight, k = dome ? Math.min(w, h) / 1000 * labelScale : 1;
+    const put = (text, cls, u, v, op, out) => {  // out: [du, dv] scene direction to push the label clear of its anchor
+      if (op <= 0.02 || Math.abs(u) > P.umax) return;
+      const q = sceneMap(u, v), sx = (q[0] + 1) / 2 * w, sy = (1 - q[1]) / 2 * h;
+      const ang = dome && Math.hypot(sx - w / 2, sy - h / 2) > 8 ? Math.atan2(w / 2 - sx, sy - h / 2) : 0;
+      let ox = 0, oy = 0;
+      if (out) { const q2 = sceneMap(u + out[0] * 0.01, v + out[1] * 0.01), dx = (q2[0] - q[0]) * w, dy = -(q2[1] - q[1]) * h, l = Math.hypot(dx, dy) || 1, fs = 13 * k;
+        const push = Math.abs(dx / l) * text.length * fs * 0.3 + Math.abs(dy / l) * fs * 0.75 + 5 * k; ox = dx / l * push; oy = dy / l * push; }
+      let el = detPool[used];
+      if (!el) { el = document.createElement("span"); box.appendChild(el); detPool.push(el); }
+      if (el.textContent !== text) el.textContent = text;
+      if (el.className !== cls) el.className = cls;
+      el.style.opacity = op.toFixed(3);
+      el.style.transform = `translate(${(sx + ox).toFixed(1)}px, ${(sy + oy).toFixed(1)}px) rotate(${ang.toFixed(4)}rad) scale(${k.toFixed(3)}) translate(-50%, -50%)`;
+      el.hidden = false; used++;
+    };
+    const c = det.g.contigs[det.ci], cy = -P.a * P.R, fade = P.alpha * (1 - smooth(P.a * 1.6));
+    put(det.g.name, "D0", 0, cy + 0.045, fade); put(`${c.id}  ${(det.start + 1).toLocaleString()}–${(det.start + det.len).toLocaleString()}`, "D2", 0, cy - 0.03, fade);
+    let lastEnd = -1e9;
+    for (const ge of det.genes) {
+      const x0 = Math.max(P.lo, ge[1] - det.start), x1 = Math.min(P.hi, det.len, ge[2] - det.start); if (x1 <= x0) continue;
+      const spanPx = (x1 - x0) * P.s * P.pxPerRad, deep = P.d > 1.45;
+      let text = ge[5] || (deep || spanPx > 150 * k ? ge[6] : ""); if (deep && ge[5] && ge[6]) text = `${ge[5]} · ${ge[6]}`;
+      if (!text || /^hypothetical protein$/i.test(text) && !deep) continue;
+      if (text.length > 44) text = text.slice(0, 42) + "…";
+      const tw = text.length * 7.4 * k, mid = (x0 + x1) / 2, at = mid * P.s * P.pxPerRad;
+      if (spanPx < 26 * k || at - tw / 2 < lastEnd + 8 * k) continue;
+      lastEnd = at + tw / 2;
+      const p = P.pt(mid, P.Rg + P.Tg / 2 + 0.006), ph = P.phi(mid);
+      put(text, "D1", p[0], p[1], P.alpha, [Math.sin(ph), Math.cos(ph)]);
+    }
+    for (const x of detTicks(P)) { const p = P.pt(x, P.R - P.Ts / 2 - 0.55 * P.Ts - 0.012), ph = P.phi(x); put(P.a < 0.5 ? (x ? `${x / 1000} kb` : "0") : (det.start + x).toLocaleString(), "D2", p[0], p[1], 0.8 * P.alpha, [-Math.sin(ph), -Math.cos(ph)]); }
+  }
+  for (let j = used; j < detPool.length; j++) detPool[j].hidden = true;
+  $("tlabels").style.opacity = (labelOp * (det ? 1 - smooth(det.depth / 0.5) : 1)).toFixed(3);
+}
+// open the fragment behind point i: turn to it, close in, and let it unfold
+function openDetail(i) {
+  const f = pointFrag.get(i), L = layouts[current]; if (!f) return false;
+  stopSpin();
+  const lon = L.lon[i] / 65535 * 2 * Math.PI - Math.PI, lat = L.lat[i] / 65535 * Math.PI - Math.PI / 2;
+  const q0 = matQuat(rot), q1 = matQuat(poseRot(lon, lat, 0)), z0 = zoom, z1 = Math.max(zoom, dome ? 30 : 10);
+  setDet(f, 0.002, f.g.frag / 2); $("tip").hidden = true;
+  tween(2600, (u) => { const m = Math.min(1, u * 1.7); rot = quatMat(slerp(q0, q1, m)); zoom = Math.exp(Math.log(z0) + (Math.log(z1) - Math.log(z0)) * m); if (det) det.depth = Math.max(0.002, u); });
+  $("detRow").hidden = false;
+  $("status").textContent = `${f.g.name}: scroll in to read the sequence, click a gene to go to it, Esc to close.`;
+  return true;
+}
+function closeDetail() {
+  if (!det) return; const d0 = det.depth;
+  tween(500 + 700 * Math.min(2, d0), (u) => { if (det) det.depth = d0 * (1 - u); }, () => { det = null; $("detRow").hidden = true; });
+}
+function gotoGene(ge, x) {
+  const P = detP(), f0 = det.focus, d0 = det.depth, s1 = R1 * SPAN / P.F;
+  const f1 = ge ? Math.max(0, Math.min(det.len, (ge[1] + ge[2]) / 2 - det.start)) : x;
+  const d1 = ge ? Math.max(1.35, Math.min(1.9, 1 + Math.log(1.3 / (ge[2] - ge[1]) / s1) / Math.log(S2 / s1))) : Math.min(2.1, d0 + 0.4);
+  tween(1400, (u) => { if (det) { det.focus = f0 + (f1 - f0) * u; det.depth = d0 + (Math.max(d0, d1) - d0) * u; } });
+}
+
 // ---------- shows: a keyframed camera path, played in real time or stepped frame by frame (capture_show.js)
 //   ?show=URL            play it (space pauses, left/right step 5 s)        ?show=URL&capture   wait for earthdna.seek(t)
 // { "mode": "dome", "fps": 30, "size": 2048, "morph": 3, "keys": [ { "t": 0, "look": "Cyanobacteria", "zoom": 1, ... } ] }
@@ -813,6 +1254,9 @@ async function load() {
 //   look (a taxon name) or lon, lat (degrees): what is looked at        zoom: 1 = from the centre, n = n times closer
 //   alt: how high above the dome's front horizon it sits (degrees)      roll (degrees)      ease: "smooth" | "linear" (arriving)
 //   size, alpha (points), labels (0..1 opacity): blended between keys   layout, select (taxon name or ""), flags: switch at t
+//   fragment: "ACC" or "ACC:contig:start" of a packed genome (pack_genome.py), gene: regex picking the fragment and the
+//   place in it, focus: base offset in the fragment; depth: 0 the point, 1 the loop of genes, 2 the sequence (blended)
+//   pointScheme, geneScheme, baseScheme: colour scheme names, cross-faded over "fade" seconds; "schemes": { ... } adds some
 const matQuat = (m) => {
   const tr = m[0] + m[4] + m[8]; let w, x, y, z, S;
   if (tr > 0) { S = Math.sqrt(tr + 1) * 2; w = S / 4; x = (m[7] - m[5]) / S; y = (m[2] - m[6]) / S; z = (m[3] - m[1]) / S; }
@@ -842,19 +1286,27 @@ async function initShow() {
   const r = await fetch(show.url); if (!r.ok) throw new Error("show file missing");
   const S = await r.json();
   if (S.mode === "dome" || show.mode === "dome") setView("dome");
-  let st = { lon: -34, lat: 9, zoom: 1, alt: domeAlt, roll: 0, layout: "similarity", select: "", flags: false, labels: 1, size: dome ? 2.4 : 1.6, alpha: 0.75 };
+  addSchemes(S.schemes);
+  let st = { depth: 0, focus: 0, frag: null, pointScheme: "phylum", geneScheme: "type", baseScheme: "base", lon: -34, lat: 9, zoom: 1, alt: domeAlt, roll: 0, layout: "similarity", select: "", flags: false, labels: 1, size: dome ? 2.4 : 1.6, alpha: 0.75 };
   const keys = [];
   for (const k of S.keys) {
     const prev = st; st = { ...st, ...k, ease: k.ease || "smooth" };
     if (!await ensureLayout(st.layout)) { console.warn(`show: no layout "${st.layout}" in this globe`); st.layout = prev.layout; }
     if (st.flags && !await ensureFlags()) { console.warn("show: this globe has no label checks"); st.flags = false; }
+    if (st.pointScheme !== "phylum" && !await ensurePointScheme(st.pointScheme)) { console.warn(`show: no point colours "${st.pointScheme}" in this globe`); st.pointScheme = prev.pointScheme; }
+    for (const [prop, kind] of [["geneScheme", "genes"], ["baseScheme", "bases"]]) if (!SCHEMES[kind][st[prop]]) { console.warn(`show: no ${kind} scheme "${st[prop]}"`); st[prop] = prev[prop]; }
+    if (k.fragment || k.gene) {
+      const f = st.fragment && findFrag(st.fragment, k.gene);
+      if (f) { st.frag = f; st.focus = k.focus ?? f.focus; await ensureSeq(f.g); const L = layouts[st.layout]; st.lon = (L.lon[f.point] / 65535 * 360 - 180); st.lat = (L.lat[f.point] / 65535 * 180 - 90); }
+      else console.warn(`show: no drawn fragment for ${st.fragment || "?"}${k.gene ? " with gene " + k.gene : ""}`);
+    }
     if (k.look) { const p = anchorOf(k.look, st.layout); if (p) [st.lon, st.lat] = p; else console.warn(`show: nothing named "${k.look}"`); }
     if (dome) st.zoom = Math.max(1, st.zoom);
     domeAlt = st.alt; st.q = matQuat(poseRot(st.lon * RAD, st.lat * RAD, st.roll * RAD));
     keys.push(st);
   }
   keys.sort((a, b) => a.t - b.t);
-  Object.assign(show, { keys, fps: S.fps || 30, size: S.size || 2048, morphDur: S.morph || 3, duration: S.duration || keys[keys.length - 1].t, sel: "", bound: "", indexed: "similarity" });
+  Object.assign(show, { keys, fps: S.fps || 30, size: S.size || 2048, morphDur: S.morph || 3, fade: S.fade || 1.5, duration: S.duration || keys[keys.length - 1].t, sel: "", bound: "", indexed: "similarity" });
   if (document.fonts) await document.fonts.ready;
   show.ready = true; applyShow(0);
 }
@@ -865,7 +1317,7 @@ function applyShow(t) {
   if (b.ease !== "linear") u = u * u * u * (u * (6 * u - 15) + 10);
   rot = quatMat(slerp(a.q, b.q, u)); zoom = Math.exp(mix(Math.log(a.zoom), Math.log(b.zoom))); domeAlt = mix(a.alt, b.alt);
   ov = { size: mix(a.size, b.size), alpha: mix(a.alpha, b.alpha) };
-  $("labels").style.opacity = mix(a.labels, b.labels).toFixed(3);
+  labelOp = mix(a.labels, b.labels);
   // layout: morph for morphDur seconds from the key where it changed
   let m = j; while (m > 0 && K[m - 1].layout === a.layout) m--;
   const mu = m > 0 ? (t - K[m].t) / show.morphDur : 1, from = mu < 1 ? K[m - 1].layout : a.layout;
@@ -875,7 +1327,16 @@ function applyShow(t) {
   current = a.layout;
   if (a.select !== show.sel) { show.sel = a.select; const s = a.select && matchTaxon(a.select, true); if (s) applySel(s.test, s.label); else clearSel(); }
   flagMode = a.flags;
-  draw(); placeLabels(); dirty = false;
+  for (const [prop, kind] of [["pointScheme", "points"], ["geneScheme", "genes"], ["baseScheme", "bases"]]) {
+    let m = j; while (m > 0 && K[m - 1][prop] === a[prop]) m--;
+    const fu = m > 0 ? (t - K[m].t) / show.fade : 1;
+    Object.assign(sch[kind], { from: fu < 1 ? K[m - 1][prop] : a[prop], to: a[prop], t: smooth(fu) });
+  }
+  // the open fragment: the one of whichever key has it open; depth and focus blend
+  const d = mix(a.depth, b.depth), f = a.depth > 0 || !b.frag ? a.frag : b.frag;
+  if (f && d > 0.001) setDet(f, d, a.frag && b.frag && a.frag.point === b.frag.point ? mix(a.focus, b.focus) : f === a.frag ? a.focus : b.focus);
+  else det = null;
+  draw(); placeLabels(); placeDetLabels(); dirty = false;
 }
 window.earthdna = {
   // resolves to { fps, size, duration } once the data and the show are loaded

@@ -31,7 +31,7 @@ const server = http.createServer((req, res) => {
   const size = +(opt.size || show.size || 2048);
   const browser = await chromium.launch({ args: ["--ignore-gpu-blocklist", "--enable-unsafe-swiftshader"] });
   const page = await browser.newPage({ viewport: { width: size, height: size }, deviceScaleFactor: 1 });
-  page.on("console", (m) => { if (m.type() === "warning" || m.type() === "error") console.error("page:", m.text()); });
+  page.on("console", (m) => { if ((m.type() === "warning" || m.type() === "error") && !/GL Driver Message|status of 404/.test(m.text())) console.error("page:", m.text()); });
   await page.goto(`http://127.0.0.1:${server.address().port}/?show=__show.json&capture`);
   const info = await page.evaluate(() => window.earthdna.ready());
   const fps = +(opt.fps || info.fps), t0 = +(opt.from || 0), t1 = +(opt.to || info.duration), n = Math.round((t1 - t0) * fps);

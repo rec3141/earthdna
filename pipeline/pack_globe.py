@@ -11,11 +11,16 @@ artifact hosts and some static hosts refuse binary types):
   ranks.b64.txt     phylum, class, order, family codes (uint16 each; 65535 = none), base64, for drilling down
                     rank by rank (domain comes from the group, genus and species from tax.b64.txt)
   traits.b64.txt    with --traits: one byte per point, bit k set when trait k applies (globe.json traits names them)
+  color_NAME.b64.txt  with --color: one byte per point for a colour scheme (globe.json colors describes each): a number
+                    scaled so 0..254 spans its min..max, or a category code; 255 = no value
 
 Rows are shuffled once (fixed seed) so points draw in random order.
 
 usage: pack_globe.py OUT.tax.tsv OUTDIR --layout similarity=map.tsv [--layout sculpt=map2.tsv] [--flags conflicts.tsv]
-                     [--traits traits.tsv] [--title "SILVA 144 SSU Ref NR99"]
+                     [--traits traits.tsv] [--color gc=gc.tsv ...] [--title "SILVA 144 SSU Ref NR99"]
+  --color NAME=values.tsv: a header naming a column of OUT.tax.tsv (id, organism, ...) and one value column, then a
+  row per key (fsb_gc.py writes id/gc). All-numeric values make a continuous scheme, anything else a categorical
+  one (at most 255 categories, the commonest first). The viewer's schemes say how each is coloured.
   traits.tsv: a header naming a column of OUT.tax.tsv (e.g. organism) and up to 8 traits, then one row per key with
   0/1 per trait (gtdb_traits.py writes one from GTDB's metadata); points whose key is missing get no traits
 """
@@ -26,7 +31,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("tax"); ap.add_argument("outdir")
 ap.add_argument("--layout", action="append", required=True)
 ap.add_argument("--flags"); ap.add_argument("--title", default="")
-ap.add_argument("--traits")
+ap.add_argument("--traits"); ap.add_argument("--color", action="append", default=[])
 ap.add_argument("--models", help="models globe: KEY=label;... (layouts named <shape>[-KEY]; the first KEY is empty), e.g. \"=Evo 2 7B;kmer=5-mers\"")
 a = ap.parse_args()
 os.makedirs(a.outdir, exist_ok=True)
@@ -96,8 +101,26 @@ if a.traits:
     tr = np.array([bits.get(r[kc], 0) for r in rows], np.uint8)
     open(os.path.join(a.outdir, "traits.b64.txt"), "w").write(b64(tr[perm]))
     print("traits: " + ", ".join(f"{n} {int((tr >> k & 1).sum())}" for k, n in enumerate(trait_names)))
+colors = []
+for spec in a.color:
+    name, path = spec.split("=", 1)
+    cl = [l.rstrip("\n").split("\t") for l in open(path)]
+    kc, val = header.index(cl[0][0]), {r[0]: r[1] for r in cl[1:] if len(r) > 1 and r[1] != ""}
+    v = [val.get(r[kc]) for r in rows]
+    try:
+        x = np.array([np.nan if t is None else float(t) for t in v])
+        lo, hi = float(np.nanmin(x)), float(np.nanmax(x))
+        code = np.where(np.isnan(x), 255, np.round((np.nan_to_num(x, nan=lo) - lo) / max(hi - lo, 1e-12) * 254)).astype(np.uint8)
+        colors.append(dict(name=name, kind="continuous", min=lo, max=hi))
+    except ValueError:
+        labels = [k for k, _ in collections.Counter(t for t in v if t is not None).most_common(255)]
+        ix = {k: i for i, k in enumerate(labels)}
+        code = np.array([ix.get(t, 255) for t in v], np.uint8)
+        colors.append(dict(name=name, kind="categorical", labels=labels))
+    open(os.path.join(a.outdir, f"color_{name}.b64.txt"), "w").write(b64(code[perm]))
+    print(f"color {name}: {colors[-1]['kind']}, {int((code != 255).sum())} of {N} points have a value")
 extra = dict(models=[dict(key=k, label=v) for k, v in (m.split("=", 1) for m in a.models.split(";"))]) if a.models else {}
-json.dump(dict(**extra, n=N, title=a.title, layouts=layouts, flags=bool(a.flags), traits=trait_names, groups=groups, groupCounts=gcount,
+json.dump(dict(**extra, colors=colors, n=N, title=a.title, layouts=layouts, flags=bool(a.flags), traits=trait_names, groups=groups, groupCounts=gcount,
                genera=genera, lineages=[x[1:] for x in lineages], lineageRank="".join(x[0] for x in lineages),
                species=species, speciesBytes=species_bytes, ranks=dict(levels=["domain"] + RANKS + ["genus", "species"], names=rank_names)),
           open(os.path.join(a.outdir, "globe.json"), "w"), separators=(",", ":"))
