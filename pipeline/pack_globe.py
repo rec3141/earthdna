@@ -18,6 +18,10 @@ Rows are shuffled once (fixed seed) so points draw in random order.
 
 usage: pack_globe.py OUT.tax.tsv OUTDIR --layout similarity=map.tsv [--layout sculpt=map2.tsv] [--flags conflicts.tsv]
                      [--traits traits.tsv] [--color gc=gc.tsv ...] [--title "SILVA 144 SSU Ref NR99"]
+                     [--layout-label "NAME=Button text|Status line"] [--about "subtitle"]
+  The first --layout is the one the viewer opens with. --layout-label names a layout's button and the line shown when
+  it is chosen (the viewer has defaults for similarity and sculpt); --about replaces the viewer's subtitle, which
+  otherwise describes an SSU globe.
   --color NAME=values.tsv: a header naming a column of OUT.tax.tsv (id, organism, ...) and one value column, then a
   row per key (fsb_gc.py writes id/gc). All-numeric values make a continuous scheme, anything else a categorical
   one (at most 255 categories, the commonest first). The viewer's schemes say how each is coloured.
@@ -32,6 +36,7 @@ ap.add_argument("tax"); ap.add_argument("outdir")
 ap.add_argument("--layout", action="append", required=True)
 ap.add_argument("--flags"); ap.add_argument("--title", default="")
 ap.add_argument("--traits"); ap.add_argument("--color", action="append", default=[])
+ap.add_argument("--layout-label", action="append", default=[]); ap.add_argument("--about", default="")
 ap.add_argument("--models", help="models globe: KEY=label;... (layouts named <shape>[-KEY]; the first KEY is empty), e.g. \"=Evo 2 7B;kmer=5-mers\"")
 a = ap.parse_args()
 os.makedirs(a.outdir, exist_ok=True)
@@ -135,9 +140,15 @@ for spec in a.color:
     with open(os.path.join(a.outdir, f"color_{name}.b64.txt"), "w") as f:
         f.write(b64(code[perm]))
     print(f"color {name}: {colors[-1]['kind']}, {int((code != 255).sum())} of {N} points have a value")
+layout_info = {}
+for spec in a.layout_label:
+    name, text = spec.split("=", 1)
+    assert name in layouts, f"--layout-label {name}: no such --layout"
+    label, _, about = text.partition("|")
+    layout_info[name] = dict(label=label, about=about)
 extra = dict(models=[dict(key=k, label=v) for k, v in (m.split("=", 1) for m in a.models.split(";"))]) if a.models else {}
 with open(os.path.join(a.outdir, "globe.json"), "w") as gf:
-    json.dump(dict(**extra, colors=colors, n=N, title=a.title, layouts=layouts, flags=bool(a.flags), traits=trait_names, groups=groups, groupCounts=gcount,
+    json.dump(dict(**extra, colors=colors, n=N, title=a.title, about=a.about, layouts=layouts, layoutInfo=layout_info, flags=bool(a.flags), traits=trait_names, groups=groups, groupCounts=gcount,
                    genera=genera, lineages=[x[1:] for x in lineages], lineageRank="".join(x[0] for x in lineages),
                    species=species, speciesBytes=species_bytes, ranks=dict(levels=["domain"] + RANKS + ["genus", "species"], names=rank_names)),
               gf, separators=(",", ":"))

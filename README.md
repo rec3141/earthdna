@@ -40,6 +40,10 @@ FASTSNE=/path/to/fastsne pipeline/build.sh $SILVA work 144
 | `pipeline/gtdb_prep.py` | GTDB genomes -> every 10 kb fragment's canonical 5-mers (sharded), reference sequences |
 | `pipeline/gtdb_reselect.py` | a bigger reference from the shards: id-hash fraction + a floor per genome |
 | `pipeline/gtdb_globe_set.py` | reference subset + projected fragments -> one point set for `pack_globe.py` |
+| `pipeline/build_motus.sh` | the mOTUs-db 4.1 globes: mOTUs by marker-gene 5-mers or co-occurrence, metagenomes by mOTU composition |
+| `pipeline/motus_prep.py` | mOTUs marker database -> fasta (one record per mOTU), GTDB taxonomy table, anchor groups |
+| `pipeline/motus_profile_traits.py` | mOTUs profiles -> per-mOTU prevalence and traits (widespread, rare, isolate, MAG-only) |
+| `pipeline/motus_abund_features.py` | mOTUs sample x mOTU profiles -> Hellinger + SVD feature tables for mOTUs and for samples |
 | `pipeline/gtdb_traits.py` | GTDB metadata -> per-genome traits (cultured, named, type material) for `pack_globe.py --traits` |
 | `pipeline/gtdb_read_refs.py` | reference fragments cut to read length, fixed at their parents' positions (read models) |
 | `pipeline/render_preview.py` | a still image of a packed globe |
