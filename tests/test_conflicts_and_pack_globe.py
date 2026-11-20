@@ -122,6 +122,40 @@ class TestConflictsAndPackGlobe(unittest.TestCase):
             self.assertEqual(int(flags_arr[16]), 2)
             self.assertEqual(int(maj_arr[16]), unk_bac_idx)
 
+    def test_color_schemes_continuous_and_categorical(self):
+        """--color: numeric values scale to 0..254 over min..max, text values become category codes, 255 = no value."""
+        with tempfile.TemporaryDirectory() as raw:
+            td = Path(raw)
+            N = 6
+            tax = td / "c.tax.tsv"
+            tax.write_text("id\tdomain\tgroup\tphylum\tclass\torder\tfamily\tgenus\tspecies\tlineage_rank\tlineage\torganism\n"
+                           + "".join(f"q{i}\tBacteria\tP\tP\tC\tO\tF\tG\tS\tp\tP\tOrg{i}\n" for i in range(N)))
+            layout = td / "map.tsv"
+            layout.write_text("id\tlon\tlat\n" + "".join(f"q{i}\t0.0\t0.0\n" for i in range(N)))
+            gc = td / "gc.tsv"          # q5 has no value
+            gc.write_text("id\tgc\n" + "".join(f"q{i}\t{0.3 + 0.1 * i:.1f}\n" for i in range(5)))
+            habitat = td / "habitat.tsv"  # keyed on organism; Org0 has no value
+            habitat.write_text("organism\thabitat\n" + "".join(
+                f"Org{i}\t{'soil' if i % 2 else 'marine'}\n" for i in range(1, N)) + "Org0\t\n")
+            gdir = td / "globe"
+            rp = run_script("pack_globe.py", [str(tax), str(gdir), f"--layout=similarity={layout}",
+                                              f"--color=gc={gc}", f"--color=habitat={habitat}"],
+                            extra_env={"PYTHONWARNINGS": "error::ResourceWarning"})
+            self.assertEqual(rp.returncode, 0, rp.stderr)
+
+            meta = json.loads((gdir / "globe.json").read_text())
+            self.assertEqual([c["name"] for c in meta["colors"]], ["gc", "habitat"])
+            self.assertEqual(meta["colors"][0]["kind"], "continuous")
+            self.assertAlmostEqual(meta["colors"][0]["min"], 0.3)
+            self.assertAlmostEqual(meta["colors"][0]["max"], 0.7)
+            self.assertEqual(meta["colors"][1], {"name": "habitat", "kind": "categorical", "labels": ["soil", "marine"]})
+
+            inv = np.argsort(np.random.default_rng(3).permutation(N))
+            gc_codes = np.frombuffer(base64.b64decode((gdir / "color_gc.b64.txt").read_text()), np.uint8)[inv]
+            self.assertEqual(gc_codes.tolist(), [0, 64, 127, 190, 254, 255])
+            hab = np.frombuffer(base64.b64decode((gdir / "color_habitat.b64.txt").read_text()), np.uint8)[inv]
+            self.assertEqual(hab.tolist(), [255, 0, 1, 0, 1, 0])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
