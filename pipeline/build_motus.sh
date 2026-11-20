@@ -101,7 +101,7 @@ $py -I "$here/pack_globe.py" "$s.tax.tsv" "$work/globe_samples" \
 if [ -n "${env[*]}" ]; then
     $py -I "$here/pack_globe.py" "$s.geo.tax.tsv" "$work/globe_samples_map" \
         --layout similarity="$s.geo.tsv" --geo-layout similarity \
-        --layout-label "similarity=Map|Where each metagenome was sampled (samples sharing a spot are scattered around it, more widely the more there are)." \
+        --layout-label "similarity=Geography|Where each metagenome was sampled (samples sharing a spot are scattered around it, more widely the more there are)." \
         --labels "environment=Environment=$s.env.tsv" --labels-info "environment=$s.info.tsv" --default-labels environment \
         --traits "$s.traits.tsv" --color study="$s.study_color.tsv" \
         --title "mOTUs-db 4.1 metagenomes with coordinates" \
