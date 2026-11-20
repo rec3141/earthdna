@@ -1,0 +1,21 @@
+{
+  "mode": "dome", "fps": 30, "size": 2048, "fade": 2,
+  "schemes": {
+    "genes": { "heat": { "by": "match", "else": "#3d4a5c", "rules": [
+      { "match": "ribosomal RNA", "color": "#f0c35a" },
+      { "match": "chaperon|heat shock", "color": "#e8595f" },
+      { "match": "recombinase|gyrase|repair", "color": "#58c78a" } ] } }
+  },
+  "keys": [
+    { "t": 0,  "fragment": "GCF_000091665.1", "gene": "16S ribosomal RNA", "zoom": 2, "labels": 1 },
+    { "t": 4,  "pointScheme": "gc" },
+    { "t": 9,  "zoom": 30, "labels": 0 },
+    { "t": 13, "depth": 1 },
+    { "t": 15, "geneScheme": "heat" },
+    { "t": 18, "baseScheme": "gc" },
+    { "t": 24, "depth": 1.5 },
+    { "t": 30, "depth": 2, "baseScheme": "base" },
+    { "t": 36, "gene": "23S ribosomal RNA", "ease": "linear" },
+    { "t": 42, "depth": 0, "zoom": 2, "pointScheme": "phylum", "labels": 1 }
+  ]
+}

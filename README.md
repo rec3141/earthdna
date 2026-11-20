@@ -47,11 +47,63 @@ FASTSNE=/path/to/fastsne pipeline/build.sh $SILVA work 144
 | `pipeline/embed_evo2.py` | any fasta -> Evo 2 layer embeddings as `.fsb` (with `embed_evo2*_grex.sbatch`) |
 | `pipeline/knn_eval.py` | feature tables -> how often nearest neighbours share each rank's label |
 | `pipeline/pilot_sample.py`, `pilot_reads.py` | genus-stratified SSU / labelled nanopore-read sets for comparing features |
-| `viewer/globe.html` | WebGL2 globe: equal-area view, layouts, labels by zoom, search, label conflicts |
+| `viewer/globe.html` | WebGL2 globe: equal-area and dome views, layouts, labels by zoom, search, label conflicts, shows |
+| `pipeline/pack_genome.py` | one genome's FASTA + GFF -> its genes and sequence, for opening its fragments in the viewer |
+| `pipeline/fsb_gc.py` | k-mer tables -> GC per row, for `pack_globe.py --color` |
+| `viewer/capture_show.js` | a show (`viewer/shows/*.json`) -> dome-master video or PNG frames |
 
 Taxonomic ranks come from SILVA's rank file rather than positions in the path, because eukaryote paths stop at
 whatever node SILVA reached. Species names come from the source-organism field and are kept only when their genus
 agrees with SILVA's (for bacteria the organism is often the host).
+
+## Planetarium dome
+
+The **Dome** view (or `?dome`) puts the viewer inside the sphere and draws an equidistant fisheye, 180 degrees across
+a disc: a dome master, with the front of the dome at the bottom of the frame. The place being looked at sits at the
+front, 40 degrees up (`?dome=ALT` to change it), and zooming moves the camera from the centre of the sphere toward
+it, so nearer points grow and spread overhead. Labels are sized as a fraction of the dome (`&labelScale=1.5`) and
+turned so their tops point at the zenith. `&ui=0` hides the panels, for running it live on a dome.
+
+A show is a list of keyframes (`viewer/shows/dome_test.json`; the format is described above `initShow` in
+`globe.html`): what to look at by taxon name or lon/lat, zoom, layout, selection, point size, label opacity.
+`?show=URL` plays it in real time (space pauses, arrows step 5 s). To render it:
+
+```
+node viewer/capture_show.js work/globe viewer/shows/dome_test.json test.mp4        # H.264, 2048 x 2048, 30 fps
+node viewer/capture_show.js work/globe viewer/shows/dome_test.json frames --size 4096   # PNG sequence
+```
+
+Frames are drawn at show time rather than wall-clock time (about 0.6 s per 2048 x 2048 frame in software WebGL).
+
+## Fragments, genes, sequence
+
+On the genome globe a point is a 10 kb fragment. For genomes packed with `pack_genome.py`, a point opens
+(double-click, or pick the genome from the menu first): it unfolds into an open loop of the fragment's genes, the
+loop's ends trailing off where the contig continues, and zooming on straightens the loop into the sequence, binned
+colours first and then letters. Click a gene to go to it, drag to move along the sequence, Esc to close.
+
+```
+python3 pipeline/pack_genome.py work/gtdb.globe.tax.tsv work/globe GCF_000091665.1 genome.fna.gz genome.gff.gz \
+    --name "Methanocaldococcus jannaschii"
+python3 pipeline/fsb_gc.py work/gc.tsv @work/gtdb.all_fsb.txt --only work/gtdb.globe.tax.tsv
+python3 pipeline/pack_globe.py ... --color gc=work/gc.tsv          # any id/value or organism/value table
+```
+
+Points, genes and bases each have colour schemes, and changing scheme cross-fades. Built in: points by phylum or
+any `--color` set; genes by type, strand or GC; bases by letter or windowed GC. Custom ones go in `schemes.json`
+beside the data (or `?schemes=URL`, or a show's `"schemes"`); the forms are listed above `SCHEMES` in `globe.html`:
+
+```
+{ "points": { "gc": { "ramp": ["#2166ac", "#f7f7f7", "#b2182b"], "domain": [0.25, 0.75] } },
+  "genes":  { "heat": { "by": "match", "else": "#3d4a5c", "rules": [
+                { "match": "ribosomal RNA", "color": "#f0c35a" }, { "match": "chaperon|heat shock", "color": "#e8595f" } ] },
+              "expr": { "by": "values", "values": { "MJ_0001": 3.2 }, "ramp": ["#222", "#fc0"], "domain": [0, 10] } },
+  "bases":  { "gatc": { "by": "motif", "rules": [{ "motif": "GATC", "color": "#f0c35a" }] } } }
+```
+
+In a show, `fragment` (`"ACC"` or `"ACC:contig:start"`), `gene` (a regex choosing the fragment and the place in it)
+and `depth` (0 the point, 1 the loop, 2 the sequence) drive the same views, and `pointScheme`, `geneScheme`,
+`baseScheme` switch colours; `viewer/shows/genome_test.json` runs through all of it.
 
 ## Placing ASVs
 

@@ -1,0 +1,18 @@
+{
+  "mode": "dome",
+  "fps": 30,
+  "size": 2048,
+  "morph": 4,
+  "keys": [
+    { "t": 0,  "look": "Bacteria", "zoom": 1, "alt": 40, "labels": 0, "size": 2.4, "alpha": 0.8 },
+    { "t": 4,  "labels": 1 },
+    { "t": 14, "look": "Archaea", "ease": "linear" },
+    { "t": 24, "look": "Cyanobacteria", "zoom": 3 },
+    { "t": 34, "look": "Prochlorococcus", "zoom": 12, "select": "Prochlorococcus" },
+    { "t": 40, "zoom": 12 },
+    { "t": 48, "look": "Bacteria", "zoom": 1, "select": "", "labels": 1 },
+    { "t": 50, "labels": 0, "layout": "sculpt" },
+    { "t": 55, "labels": 1 },
+    { "t": 60, "roll": 20 }
+  ]
+}
