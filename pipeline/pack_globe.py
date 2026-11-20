@@ -19,14 +19,19 @@ Rows are shuffled once (fixed seed) so points draw in random order.
 usage: pack_globe.py OUT.tax.tsv OUTDIR --layout similarity=map.tsv [--layout sculpt=map2.tsv] [--flags conflicts.tsv]
                      [--traits traits.tsv] [--color gc=gc.tsv ...] [--title "SILVA 144 SSU Ref NR99"]
                      [--layout-label "NAME=Button text|Status line"] [--about "subtitle"]
-                     [--labels "KEY=Display name=labels.tsv"]
+                     [--labels "KEY=Display name=labels.tsv"] [--labels-info KEY=info.tsv] [--labels-tip "KEY=Mostly in"]
+                     [--default-labels KEY] [--geo-layout NAME]
   The first --layout is the one the viewer opens with. --layout-label names a layout's button and the line shown when
   it is chosen (the viewer has defaults for similarity and sculpt); --about replaces the viewer's subtitle, which
   otherwise describes an SSU globe.
   --labels adds a label set the viewer can switch to in place of the taxonomy (e.g. environment): labels.tsv has a
   header naming a column of OUT.tax.tsv and then one column per level, top level first, and a row per key; an empty
   value means no label at that level. Written as labels_KEY.b64.txt, one uint16 array per level (65535 = none),
-  named in globe.json labelSets.
+  named in globe.json labelSets. --labels-info gives a label set a tooltip: info.tsv has a header naming a column of
+  OUT.tax.tsv and then the columns to show (the first is the title; lat and lon are shown as coordinates), written as
+  info_KEY.txt, one tab-separated line per point; --labels-tip words go before the label path in that tooltip.
+  --default-labels opens the globe on that label set instead of the taxonomy. --geo-layout marks a layout whose
+  lon/lat are places on Earth, which the viewer must show as they are (it otherwise turns each layout to suit it).
   --color NAME=values.tsv: a header naming a column of OUT.tax.tsv (id, organism, ...) and one value column, then a
   row per key (fsb_gc.py writes id/gc). All-numeric values make a continuous scheme, anything else a categorical
   one (at most 255 categories, the commonest first). The viewer's schemes say how each is coloured.
@@ -43,6 +48,9 @@ ap.add_argument("--flags"); ap.add_argument("--title", default="")
 ap.add_argument("--traits"); ap.add_argument("--color", action="append", default=[])
 ap.add_argument("--layout-label", action="append", default=[]); ap.add_argument("--about", default="")
 ap.add_argument("--labels", action="append", default=[])
+ap.add_argument("--labels-info", action="append", default=[]); ap.add_argument("--labels-tip", action="append", default=[])
+ap.add_argument("--default-labels", default="")
+ap.add_argument("--geo-layout", action="append", default=[])
 ap.add_argument("--models", help="models globe: KEY=label;... (layouts named <shape>[-KEY]; the first KEY is empty), e.g. \"=Evo 2 7B;kmer=5-mers\"")
 a = ap.parse_args()
 os.makedirs(a.outdir, exist_ok=True)
@@ -162,6 +170,21 @@ for spec in a.labels:
         f.write(b64(*arrs))
     label_sets.append(dict(key=key, name=name, levels=levels, names=names))
     print(f"labels {key}: " + ", ".join(f"{lv} {len(names[lv])}" for lv in levels) + f"; {sum(1 for r in rows if r[kc] in by)} of {N} points keyed")
+for spec in a.labels_info:
+    key, path = spec.split("=", 1)
+    ls = next(x for x in label_sets if x["key"] == key)
+    with open(path) as lf:
+        il = [l.rstrip("\n").split("\t") for l in lf]
+    kc, cols = header.index(il[0][0]), il[0][1:]
+    by = {r[0]: r[1:] for r in il[1:]}
+    empty = [""] * len(cols)
+    with open(os.path.join(a.outdir, f"info_{key}.txt"), "w") as f:
+        f.write("\n".join("\t".join(by.get(rows[i][kc], empty)) for i in perm) + "\n")
+    ls["info"] = cols
+for spec in a.labels_tip:
+    key, text = spec.split("=", 1)
+    next(x for x in label_sets if x["key"] == key)["tip"] = text
+assert not a.default_labels or any(x["key"] == a.default_labels for x in label_sets), "--default-labels: no such --labels"
 layout_info = {}
 for spec in a.layout_label:
     name, text = spec.split("=", 1)
@@ -170,7 +193,7 @@ for spec in a.layout_label:
     layout_info[name] = dict(label=label, about=about)
 extra = dict(models=[dict(key=k, label=v) for k, v in (m.split("=", 1) for m in a.models.split(";"))]) if a.models else {}
 with open(os.path.join(a.outdir, "globe.json"), "w") as gf:
-    json.dump(dict(**extra, colors=colors, n=N, title=a.title, about=a.about, layouts=layouts, layoutInfo=layout_info, labelSets=label_sets, flags=bool(a.flags), traits=trait_names, groups=groups, groupCounts=gcount,
+    json.dump(dict(**extra, colors=colors, n=N, title=a.title, about=a.about, layouts=layouts, layoutInfo=layout_info, labelSets=label_sets, defaultLabels=a.default_labels, geoLayouts=a.geo_layout, flags=bool(a.flags), traits=trait_names, groups=groups, groupCounts=gcount,
                    genera=genera, lineages=[x[1:] for x in lineages], lineageRank="".join(x[0] for x in lineages),
                    species=species, speciesBytes=species_bytes, ranks=dict(levels=["domain"] + RANKS + ["genus", "species"], names=rank_names)),
               gf, separators=(",", ":"))

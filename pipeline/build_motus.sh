@@ -11,7 +11,9 @@
 #     sculpt-abund      the same, with the taxonomy springs
 #   WORK/globe_samples  one point per metagenome, placed by its mOTU composition, labelled by its most abundant taxon
 #                 at each rank and coloured by phylum or by study
-#   Both directories hold viewer/globe.html's .b64.txt files and microscape.app's .bin files.
+#   WORK/globe_samples_map  the metagenomes that have coordinates (with the motus-db.org table), on a map of the Earth
+#                 or by mOTU composition
+#   Each directory holds viewer/globe.html's .b64.txt files and microscape.app's .bin files.
 #
 # usage: pipeline/build_motus.sh RAW WORK
 #   RAW holds, from Zenodo (https://www.motus-tool.org/database/download.html names the records):
@@ -84,17 +86,29 @@ $py -I "$here/pack_globe.py" "$p.abund.tax.tsv" "$work/globe_motus" \
     --layout-label "similarity-abund=Co-occurrence|Placed by relative abundance across 115,013 metagenomes: mOTUs found in the same samples sit together." \
     --layout-label "sculpt-abund=Co-occurrence + taxonomy|Co-occurrence across metagenomes, with each mOTU gently pulled toward its domain, phylum, class and order." \
     --flags "$p.conflicts.tsv" --traits "$p.traits.tsv" --color log10_samples="$p.log_prevalence.tsv" \
-    ${env:+--labels "environment=Environment=$p.env.tsv"} \
+    ${env:+--labels "environment=Environment=$p.env.tsv" --labels-info "environment=$p.info.tsv" --labels-tip "environment=Mostly found in"} \
     --title "mOTUs-db 4.1" \
     --about "mOTUs (species-level clusters of 3.9M genomes) from mOTUs-db 4.1, GTDB R226 taxonomy, on a sphere by spherical t-SNE (fastsne): by their marker genes' 5-mer composition, or by which metagenomes they occur in."
 $py -I "$here/pack_globe.py" "$s.tax.tsv" "$work/globe_samples" \
     --layout similarity="$s.sphere.tsv" \
     --layout-label "similarity=mOTU composition|Placed by mOTU composition (Hellinger distance between relative abundance profiles)." \
     --traits "$s.traits.tsv" --color study="$s.study_color.tsv" \
-    ${env:+--labels "environment=Environment=$s.env.tsv"} \
+    ${env:+--labels "environment=Environment=$s.env.tsv" --labels-info "environment=$s.info.tsv" --default-labels environment} \
     --title "mOTUs-db 4.1 metagenomes" \
     --about "Metagenomes profiled by mOTUs-db 4.1, placed by their mOTU composition with spherical t-SNE (fastsne). Each is labelled by its most abundant taxon at every rank."
-for g in globe_motus globe_samples; do
+# the samples that have coordinates, on a map of the Earth (and by composition, to morph between the two)
+if [ -n "${env[*]}" ]; then
+    $py -I "$here/pack_globe.py" "$s.geo.tax.tsv" "$work/globe_samples_map" \
+        --layout similarity="$s.geo.tsv" --layout similarity-comp="$s.sphere.tsv" --geo-layout similarity \
+        --models "=Map;comp=mOTU composition" \
+        --layout-label "similarity=Map|Where each metagenome was sampled (moved by up to 0.3 degrees so samples from one site show as a patch)." \
+        --layout-label "similarity-comp=mOTU composition|Placed by mOTU composition (Hellinger distance between relative abundance profiles)." \
+        --labels "environment=Environment=$s.env.tsv" --labels-info "environment=$s.info.tsv" --default-labels environment \
+        --traits "$s.traits.tsv" --color study="$s.study_color.tsv" \
+        --title "mOTUs-db 4.1 metagenomes with coordinates" \
+        --about "The metagenomes of mOTUs-db 4.1 that have coordinates (motus-db.org), on the Earth where they were sampled, or placed by their mOTU composition."
+fi
+for g in globe_motus globe_samples ${env:+globe_samples_map}; do
     cp "$here/../viewer/globe.html" "$work/$g/index.html"
     for f in "$work/$g"/*.b64.txt; do base64 -d "$f" > "${f%.b64.txt}.bin"; done
 done

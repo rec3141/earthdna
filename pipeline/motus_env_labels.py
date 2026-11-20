@@ -4,6 +4,13 @@
   OUT_SAMPLE.env.tsv  per sample (the rows of SAMPLES.tax.tsv): context domain, realm, ecosystem type, ecosystem,
                       compartment, sample source, as motus-db.org curates them
   OUT_SAMPLE.coords.tsv  per sample: latitude, longitude (empty when the site has none)
+  OUT_SAMPLE.geo.tsv  the samples that have coordinates, as a map layout (id, lon, lat), each moved by up to 0.3
+                      degrees (fixed per sample) so the many samples taken at one spot spread into a visible patch
+  OUT_SAMPLE.geo.tax.tsv  SAMPLES.tax.tsv restricted to those samples
+  OUT_SAMPLE.info.tsv  per sample, for the viewer's tooltip while the environment labels are on: sample, study,
+                      BioSample, lat, lon
+  OUT_MOTU.info.tsv   per mOTU, the same: mOTU, its GTDB species (or genus), the number of samples and studies it
+                      is detected in
   OUT_MOTU.env.tsv    per mOTU (the rows of MOTU.tax.tsv): the environment holding most of its abundance, chosen top
                       down so the levels nest: the context domain with the largest summed relative abundance over the
                       mOTU's samples, then the largest realm inside that domain, and so on to the sample source
@@ -47,6 +54,23 @@ with open(out_s + ".coords.tsv", "w") as f:
     for s in samples:
         la, lo = blank(rows[s]["latitude_degN"]), blank(rows[s]["longitude_degE"])
         f.write(f"{s}\t{la}\t{lo}\n")
+import zlib
+s_head, s_rows = open(s_tax).readline(), {l.split("\t", 1)[0]: l for l in list(open(s_tax))[1:]}
+with open(out_s + ".geo.tsv", "w") as g, open(out_s + ".geo.tax.tsv", "w") as t:
+    g.write("id\tlon\tlat\n"); t.write(s_head)
+    for s in samples:
+        la, lo = blank(rows[s]["latitude_degN"]), blank(rows[s]["longitude_degE"])
+        if not la or not lo: continue
+        h = zlib.crc32(s.encode())
+        ang, rad = (h & 0xffff) / 65536 * 2 * np.pi, 0.3 * np.sqrt((h >> 16) / 65536)
+        la2 = max(-89.9, min(89.9, float(la) + rad * np.sin(ang)))
+        lo2 = (float(lo) + rad * np.cos(ang) / max(0.05, np.cos(np.radians(la2))) + 180) % 360 - 180
+        g.write(f"{s}\t{lo2:.5f}\t{la2:.5f}\n"); t.write(s_rows[s])
+with open(out_s + ".info.tsv", "w") as f:
+    f.write("id\tSample\tStudy\tBioSample\tlat\tlon\n")
+    for s in samples:
+        r = rows[s]
+        f.write("\t".join([s, s, r["sushistudy"], r["biosample"], blank(r["latitude_degN"]), blank(r["longitude_degE"])]) + "\n")
 print(f"samples: {len(samples)}, with a context domain {sum(1 for p in path if p[0])}, "
       f"with coordinates {sum(1 for s in samples if blank(rows[s]['latitude_degN']))}")
 
@@ -60,6 +84,18 @@ cols = np.array([col[s] for s in samples])
 mrow = {m: i for i, m in enumerate(motus)}
 mids = [l.split("\t", 1)[0] for l in list(open(m_tax))[1:]]
 A = RA[np.array([mrow[m] for m in mids])][:, cols].tocsr()      # mOTU x labelled sample
+D = X.tocsr()[np.array([mrow[m] for m in mids])]                 # every profiled sample, for the detection counts
+study_of = np.array([s.split("_", 1)[0] for s in allsmp])
+tax = {l.split("\t")[0]: l.rstrip("\n").split("\t") for l in list(open(m_tax))[1:]}
+th = open(m_tax).readline().rstrip("\n").split("\t")
+gi, si = th.index("genus"), th.index("species")
+with open(out_m + ".info.tsv", "w") as f:
+    f.write("id\tmOTU\ttaxon\tSamples\tStudies\n")
+    for i, m in enumerate(mids):
+        js = D.indices[D.indptr[i]:D.indptr[i + 1]]
+        t = tax[m]
+        name = t[si] or (t[gi] + " sp." if t[gi] else "")
+        f.write(f"{m}\t{m}\t{name}\t{len(js)}\t{len(set(study_of[js]))}\n")
 choice = [[""] * len(L) for _ in mids]
 prefix_of_motu = np.zeros(len(mids), np.int64)                   # code of the chosen path so far (level k-1)
 prev_prefixes = {(): 0}
