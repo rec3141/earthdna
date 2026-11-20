@@ -18,6 +18,9 @@
 #     db_mOTU/ (db_mOTU.tar.gz extracted: mOTUsv4.1.db.fna.gz, *.map.tsv.gz, *.gtdb.taxonomy.*.tsv.gz,
 #       mOTUsv4.1.genomes.tsv.gz, mOTUsv4.1.db.blocklist.gz; the BWA index is not needed)
 #     motus41.profiles_sparse.npz, motus41.profiles_{motu,sample}_index.csv.gz, mOTUs4.1.samples.tsv.gz
+#   and, for the Environment labels, motusdb_org_samples.tsv: the motus-db.org Samples table
+#     (python3 -I pipeline/motus_fetch_sample_table.py RAW/motusdb_org_samples.tsv); without it the globes get no
+#     environment labels
 # env: FASTSNE (fastsne binary, GPU), PYTHON (python3 with numpy, scipy, scikit-learn), ANCHOR (spring weights
 #   domain,phylum,class,order; build_gtdb.sh's, since mOTUs are also ~97% Bacteria and SILVA's domain pull squeezes them
 #   into one cap), ANCHOR_ABUND (the same for sculpt-abund)
@@ -50,6 +53,13 @@ awk -F'\t' 'NR == 1 {print "organism\tstudy"; next} {print}' "$s.study.tsv" > "$
 paste <(tail -n +2 "$p.tax.tsv" | cut -f1) "$p.anchor" | \
     awk -F'\t' 'NR == FNR {if (FNR > 1) k[$1] = 1; next} ($1 in k) {print $2}' "$p.abund.tax.tsv" - > "$p.abund.anchor"
 
+env=()
+if [ -s "$raw/motusdb_org_samples.tsv" ]; then
+    ts "environment labels"
+    $py -I "$here/motus_env_labels.py" "$raw/motusdb_org_samples.tsv" "$raw" "$s.tax.tsv" "$p.abund.tax.tsv" "$s" "$p"
+    env=(1)
+fi
+
 # The 5-mer maps embed every mOTU with markers; the globe shows those that are also profiled (the abundance rows).
 sph=(--sphere auto --h 0.28 --seed 1)
 run() { local out=$1; shift; ts "fastsne -> $out"; [ -s "$out" ] || nice "$fastsne" -o "$out" "${sph[@]}" "$@"; }
@@ -74,12 +84,14 @@ $py -I "$here/pack_globe.py" "$p.abund.tax.tsv" "$work/globe_motus" \
     --layout-label "similarity-abund=Co-occurrence|Placed by relative abundance across 115,013 metagenomes: mOTUs found in the same samples sit together." \
     --layout-label "sculpt-abund=Co-occurrence + taxonomy|Co-occurrence across metagenomes, with each mOTU gently pulled toward its domain, phylum, class and order." \
     --flags "$p.conflicts.tsv" --traits "$p.traits.tsv" --color log10_samples="$p.log_prevalence.tsv" \
+    ${env:+--labels "environment=Environment=$p.env.tsv"} \
     --title "mOTUs-db 4.1" \
     --about "mOTUs (species-level clusters of 3.9M genomes) from mOTUs-db 4.1, GTDB R226 taxonomy, on a sphere by spherical t-SNE (fastsne): by their marker genes' 5-mer composition, or by which metagenomes they occur in."
 $py -I "$here/pack_globe.py" "$s.tax.tsv" "$work/globe_samples" \
     --layout similarity="$s.sphere.tsv" \
     --layout-label "similarity=mOTU composition|Placed by mOTU composition (Hellinger distance between relative abundance profiles)." \
     --traits "$s.traits.tsv" --color study="$s.study_color.tsv" \
+    ${env:+--labels "environment=Environment=$s.env.tsv"} \
     --title "mOTUs-db 4.1 metagenomes" \
     --about "Metagenomes profiled by mOTUs-db 4.1, placed by their mOTU composition with spherical t-SNE (fastsne). Each is labelled by its most abundant taxon at every rank."
 for g in globe_motus globe_samples; do

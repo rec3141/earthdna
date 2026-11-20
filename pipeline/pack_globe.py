@@ -19,9 +19,14 @@ Rows are shuffled once (fixed seed) so points draw in random order.
 usage: pack_globe.py OUT.tax.tsv OUTDIR --layout similarity=map.tsv [--layout sculpt=map2.tsv] [--flags conflicts.tsv]
                      [--traits traits.tsv] [--color gc=gc.tsv ...] [--title "SILVA 144 SSU Ref NR99"]
                      [--layout-label "NAME=Button text|Status line"] [--about "subtitle"]
+                     [--labels "KEY=Display name=labels.tsv"]
   The first --layout is the one the viewer opens with. --layout-label names a layout's button and the line shown when
   it is chosen (the viewer has defaults for similarity and sculpt); --about replaces the viewer's subtitle, which
   otherwise describes an SSU globe.
+  --labels adds a label set the viewer can switch to in place of the taxonomy (e.g. environment): labels.tsv has a
+  header naming a column of OUT.tax.tsv and then one column per level, top level first, and a row per key; an empty
+  value means no label at that level. Written as labels_KEY.b64.txt, one uint16 array per level (65535 = none),
+  named in globe.json labelSets.
   --color NAME=values.tsv: a header naming a column of OUT.tax.tsv (id, organism, ...) and one value column, then a
   row per key (fsb_gc.py writes id/gc). All-numeric values make a continuous scheme, anything else a categorical
   one (at most 255 categories, the commonest first). The viewer's schemes say how each is coloured.
@@ -37,6 +42,7 @@ ap.add_argument("--layout", action="append", required=True)
 ap.add_argument("--flags"); ap.add_argument("--title", default="")
 ap.add_argument("--traits"); ap.add_argument("--color", action="append", default=[])
 ap.add_argument("--layout-label", action="append", default=[]); ap.add_argument("--about", default="")
+ap.add_argument("--labels", action="append", default=[])
 ap.add_argument("--models", help="models globe: KEY=label;... (layouts named <shape>[-KEY]; the first KEY is empty), e.g. \"=Evo 2 7B;kmer=5-mers\"")
 a = ap.parse_args()
 os.makedirs(a.outdir, exist_ok=True)
@@ -140,6 +146,22 @@ for spec in a.color:
     with open(os.path.join(a.outdir, f"color_{name}.b64.txt"), "w") as f:
         f.write(b64(code[perm]))
     print(f"color {name}: {colors[-1]['kind']}, {int((code != 255).sum())} of {N} points have a value")
+label_sets = []
+for spec in a.labels:
+    key, name, path = spec.split("=", 2)
+    with open(path) as lf:
+        ll = [l.rstrip("\n").split("\t") for l in lf]
+    kc, levels = header.index(ll[0][0]), ll[0][1:]
+    by = {r[0]: r[1:] for r in ll[1:]}
+    names, arrs = {}, []
+    for k, lv in enumerate(levels):
+        vals = [(by.get(r[kc]) or [""] * len(levels))[k] for r in rows]
+        names[lv], _, c = codes(vals)
+        arrs.append(c[perm].astype("<u2"))
+    with open(os.path.join(a.outdir, f"labels_{key}.b64.txt"), "w") as f:
+        f.write(b64(*arrs))
+    label_sets.append(dict(key=key, name=name, levels=levels, names=names))
+    print(f"labels {key}: " + ", ".join(f"{lv} {len(names[lv])}" for lv in levels) + f"; {sum(1 for r in rows if r[kc] in by)} of {N} points keyed")
 layout_info = {}
 for spec in a.layout_label:
     name, text = spec.split("=", 1)
@@ -148,7 +170,7 @@ for spec in a.layout_label:
     layout_info[name] = dict(label=label, about=about)
 extra = dict(models=[dict(key=k, label=v) for k, v in (m.split("=", 1) for m in a.models.split(";"))]) if a.models else {}
 with open(os.path.join(a.outdir, "globe.json"), "w") as gf:
-    json.dump(dict(**extra, colors=colors, n=N, title=a.title, about=a.about, layouts=layouts, layoutInfo=layout_info, flags=bool(a.flags), traits=trait_names, groups=groups, groupCounts=gcount,
+    json.dump(dict(**extra, colors=colors, n=N, title=a.title, about=a.about, layouts=layouts, layoutInfo=layout_info, labelSets=label_sets, flags=bool(a.flags), traits=trait_names, groups=groups, groupCounts=gcount,
                    genera=genera, lineages=[x[1:] for x in lineages], lineageRank="".join(x[0] for x in lineages),
                    species=species, speciesBytes=species_bytes, ranks=dict(levels=["domain"] + RANKS + ["genus", "species"], names=rank_names)),
               gf, separators=(",", ":"))
