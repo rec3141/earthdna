@@ -4,8 +4,10 @@
   OUT_SAMPLE.env.tsv  per sample (the rows of SAMPLES.tax.tsv): context domain, realm, ecosystem type, ecosystem,
                       compartment, sample source, as motus-db.org curates them
   OUT_SAMPLE.coords.tsv  per sample: latitude, longitude (empty when the site has none)
-  OUT_SAMPLE.geo.tsv  the samples that have coordinates, as a map layout (id, lon, lat), each moved by up to 0.3
-                      degrees (fixed per sample) so the many samples taken at one spot spread into a visible patch
+  OUT_SAMPLE.geo.tsv  the samples that have coordinates, as a map layout (id, lon, lat). Samples that share exact
+                      coordinates are scattered around them, each by a fixed amount, within 0.02 * sqrt(n) degrees
+                      for n samples at that spot: a lone sample stays within about 2 km, 1,000 at one spot spread
+                      over about 0.6 degrees
   OUT_SAMPLE.geo.tax.tsv  SAMPLES.tax.tsv restricted to those samples
   OUT_SAMPLE.info.tsv  per sample, for the viewer's tooltip while the environment labels are on: sample, study,
                       BioSample, lat, lon
@@ -30,6 +32,14 @@ site, raw, s_tax, m_tax, out_s, out_m = sys.argv[1:7]
 L = ["context_domain", "realm", "ecosystem_type", "ecosystem_name", "ecosystem_compartment", "sample_source"]
 HEAD = ["context domain", "realm", "ecosystem type", "ecosystem", "compartment", "sample source"]
 blank = lambda v: "" if v in ("", "NA", "None", "nan") else v
+def coords(r):
+    """the site's latitude, longitude as given, or ("", "") when either is missing or out of range (27 DRAG22-1
+    samples carry latitudes near -170 and longitudes near -350)"""
+    la, lo = blank(r["latitude_degN"]), blank(r["longitude_degE"])
+    try:
+        return (la, lo) if la and lo and abs(float(la)) <= 90 and abs(float(lo)) <= 180 else ("", "")
+    except ValueError:
+        return "", ""
 
 rows = {r["sushisample"]: r for r in csv.DictReader(open(site), delimiter="\t")}
 samples = [l.split("\t", 1)[0] for l in list(open(s_tax))[1:]]
@@ -52,27 +62,28 @@ with open(out_s + ".env.tsv", "w") as f:
 with open(out_s + ".coords.tsv", "w") as f:
     f.write("id\tlat\tlon\n")
     for s in samples:
-        la, lo = blank(rows[s]["latitude_degN"]), blank(rows[s]["longitude_degE"])
+        la, lo = coords(rows[s])
         f.write(f"{s}\t{la}\t{lo}\n")
 import zlib
 s_head, s_rows = open(s_tax).readline(), {l.split("\t", 1)[0]: l for l in list(open(s_tax))[1:]}
+at_spot = collections.Counter(coords(rows[s]) for s in samples)
 with open(out_s + ".geo.tsv", "w") as g, open(out_s + ".geo.tax.tsv", "w") as t:
     g.write("id\tlon\tlat\n"); t.write(s_head)
     for s in samples:
-        la, lo = blank(rows[s]["latitude_degN"]), blank(rows[s]["longitude_degE"])
-        if not la or not lo: continue
-        h = zlib.crc32(s.encode())
-        ang, rad = (h & 0xffff) / 65536 * 2 * np.pi, 0.3 * np.sqrt((h >> 16) / 65536)
+        la, lo = coords(rows[s])
+        if not la: continue
+        h, rmax = zlib.crc32(s.encode()), 0.02 * np.sqrt(at_spot[(la, lo)])
+        ang, rad = (h & 0xffff) / 65536 * 2 * np.pi, rmax * np.sqrt((h >> 16) / 65536)
         la2 = max(-89.9, min(89.9, float(la) + rad * np.sin(ang)))
         lo2 = (float(lo) + rad * np.cos(ang) / max(0.05, np.cos(np.radians(la2))) + 180) % 360 - 180
-        g.write(f"{s}\t{lo2:.5f}\t{la2:.5f}\n"); t.write(s_rows[s])
+        g.write(f"{s}\t{lo2:.6f}\t{la2:.6f}\n"); t.write(s_rows[s])
 with open(out_s + ".info.tsv", "w") as f:
     f.write("id\tSample\tStudy\tBioSample\tlat\tlon\n")
     for s in samples:
         r = rows[s]
-        f.write("\t".join([s, s, r["sushistudy"], r["biosample"], blank(r["latitude_degN"]), blank(r["longitude_degE"])]) + "\n")
+        f.write("\t".join([s, s, r["sushistudy"], r["biosample"], *coords(r)]) + "\n")
 print(f"samples: {len(samples)}, with a context domain {sum(1 for p in path if p[0])}, "
-      f"with coordinates {sum(1 for s in samples if blank(rows[s]['latitude_degN']))}")
+      f"with coordinates {sum(1 for s in samples if coords(rows[s])[0])}")
 
 # mOTUs: summed relative abundance over each sample's environment path, chosen top down
 X = sp.load_npz(f"{raw}/motus41.profiles_sparse.npz").tocsc().astype(np.float64)

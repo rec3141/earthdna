@@ -25,7 +25,7 @@
 #     environment labels
 # env: FASTSNE (fastsne binary, GPU), PYTHON (python3 with numpy, scipy, scikit-learn), ANCHOR (spring weights
 #   domain,phylum,class,order; build_gtdb.sh's, since mOTUs are also ~97% Bacteria and SILVA's domain pull squeezes them
-#   into one cap), ANCHOR_ABUND (the same for sculpt-abund)
+#   into one cap), ANCHOR_ABUND (the same for sculpt-abund), DEDUP (fastsne --dedup, 2)
 # The CPU steps take a few minutes and about 3 GB; each fastsne run is under a minute on one 20 GB GPU.
 set -euo pipefail
 raw=$1; work=$2
@@ -63,7 +63,9 @@ if [ -s "$raw/motusdb_org_samples.tsv" ]; then
 fi
 
 # The 5-mer maps embed every mOTU with markers; the globe shows those that are also profiled (the abundance rows).
-sph=(--sphere auto --h 0.28 --seed 1)
+# --dedup gives points whose neighbourhoods overlap heavily (chains of near-identical profiles, drawn as worms) less
+# repulsion, so each chain gathers into one patch
+sph=(--sphere auto --h 0.28 --seed 1 --dedup "${DEDUP:-2}")
 run() { local out=$1; shift; ts "fastsne -> $out"; [ -s "$out" ] || nice "$fastsne" -o "$out" "${sph[@]}" "$@"; }
 run "$p.sphere.tsv" -i "$p.fsb" --transform sqrt --pca 128 --write-knn "$p.knn"
 anchor=${ANCHOR:-0.0001,0.001,0.001,0.000125}
@@ -80,9 +82,9 @@ ts "viewer data"
 $py -I "$here/pack_globe.py" "$p.abund.tax.tsv" "$work/globe_motus" \
     --layout similarity="$p.sphere.tsv" --layout sculpt="$p.sculpt.tsv" \
     --layout similarity-abund="$p.abund.sphere.tsv" --layout sculpt-abund="$p.abund.sculpt.tsv" \
-    --models "=5-mers;abund=Co-occurrence" \
-    --layout-label "similarity=5-mers|Placed by marker-gene 5-mer similarity alone." \
-    --layout-label "sculpt=5-mers + taxonomy|Marker-gene 5-mers, with each mOTU gently pulled toward its domain, phylum, class and order." \
+    --models "=Marker gene 5-mers;abund=Co-occurrence" \
+    --layout-label "similarity=Marker gene 5-mers|Placed by marker-gene 5-mer similarity alone." \
+    --layout-label "sculpt=Marker gene 5-mers + taxonomy|Marker-gene 5-mers, with each mOTU gently pulled toward its domain, phylum, class and order." \
     --layout-label "similarity-abund=Co-occurrence|Placed by relative abundance across 115,013 metagenomes: mOTUs found in the same samples sit together." \
     --layout-label "sculpt-abund=Co-occurrence + taxonomy|Co-occurrence across metagenomes, with each mOTU gently pulled toward its domain, phylum, class and order." \
     --flags "$p.conflicts.tsv" --traits "$p.traits.tsv" --color log10_samples="$p.log_prevalence.tsv" \
@@ -101,7 +103,7 @@ if [ -n "${env[*]}" ]; then
     $py -I "$here/pack_globe.py" "$s.geo.tax.tsv" "$work/globe_samples_map" \
         --layout similarity="$s.geo.tsv" --layout similarity-comp="$s.sphere.tsv" --geo-layout similarity \
         --models "=Map;comp=mOTU composition" \
-        --layout-label "similarity=Map|Where each metagenome was sampled (moved by up to 0.3 degrees so samples from one site show as a patch)." \
+        --layout-label "similarity=Map|Where each metagenome was sampled (samples sharing a spot are scattered around it, more widely the more there are)." \
         --layout-label "similarity-comp=mOTU composition|Placed by mOTU composition (Hellinger distance between relative abundance profiles)." \
         --labels "environment=Environment=$s.env.tsv" --labels-info "environment=$s.info.tsv" --default-labels environment \
         --traits "$s.traits.tsv" --color study="$s.study_color.tsv" \
