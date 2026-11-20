@@ -12,7 +12,6 @@
 #   WORK/globe_samples  one point per metagenome, placed by its mOTU composition, labelled by its most abundant taxon
 #                 at each rank and coloured by phylum or by study
 #   WORK/globe_samples_map  the metagenomes that have coordinates (with the motus-db.org table), on a map of the Earth
-#                 or by mOTU composition
 #   Each directory holds viewer/globe.html's .b64.txt files and microscape.app's .bin files.
 #
 # usage: pipeline/build_motus.sh RAW WORK
@@ -98,17 +97,15 @@ $py -I "$here/pack_globe.py" "$s.tax.tsv" "$work/globe_samples" \
     ${env:+--labels "environment=Environment=$s.env.tsv" --labels-info "environment=$s.info.tsv" --default-labels environment} \
     --title "mOTUs-db 4.1 metagenomes" \
     --about "Metagenomes profiled by mOTUs-db 4.1, placed by their mOTU composition with spherical t-SNE (fastsne). Each is labelled by its most abundant taxon at every rank."
-# the samples that have coordinates, on a map of the Earth (and by composition, to morph between the two)
+# the samples that have coordinates, on a map of the Earth
 if [ -n "${env[*]}" ]; then
     $py -I "$here/pack_globe.py" "$s.geo.tax.tsv" "$work/globe_samples_map" \
-        --layout similarity="$s.geo.tsv" --layout similarity-comp="$s.sphere.tsv" --geo-layout similarity \
-        --models "=Map;comp=mOTU composition" \
+        --layout similarity="$s.geo.tsv" --geo-layout similarity \
         --layout-label "similarity=Map|Where each metagenome was sampled (samples sharing a spot are scattered around it, more widely the more there are)." \
-        --layout-label "similarity-comp=mOTU composition|Placed by mOTU composition (Hellinger distance between relative abundance profiles)." \
         --labels "environment=Environment=$s.env.tsv" --labels-info "environment=$s.info.tsv" --default-labels environment \
         --traits "$s.traits.tsv" --color study="$s.study_color.tsv" \
         --title "mOTUs-db 4.1 metagenomes with coordinates" \
-        --about "The metagenomes of mOTUs-db 4.1 that have coordinates (motus-db.org), on the Earth where they were sampled, or placed by their mOTU composition."
+        --about "The metagenomes of mOTUs-db 4.1 that have coordinates (motus-db.org), on the Earth where they were sampled."
 fi
 for g in globe_motus globe_samples ${env:+globe_samples_map}; do
     cp "$here/../viewer/globe.html" "$work/$g/index.html"
