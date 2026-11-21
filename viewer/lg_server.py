@@ -17,7 +17,8 @@ With --relay the screens sync through a hosted copy of the viewer instead (micro
 The 3D mouse (3Dconnexion SpaceNavigator and relatives) is read from its Linux input device: the first device whose
 name mentions 3Dconnexion, SpaceNavigator or SpaceMouse (or /dev/input/spacenavigator, which Liquid Galaxy's udev rule
 makes), or the path given with --nav. Reading it needs read permission on that /dev/input/event* file. Its axes go out about 30 times a second while
-it is pushed, normalised to roughly -1..1, with one all-zero message when it is let go.
+it is pushed, normalised to roughly -1..1 (below DEAD counts as zero: the device rests slightly off zero), with one
+all-zero message when it is let go.
 
 Standard library only, Python 3.7+.
 """
@@ -131,6 +132,7 @@ class Handler(SimpleHTTPRequestHandler):
 EV_KEY, EV_REL, EV_ABS = 1, 2, 3
 EVENT = struct.Struct("llHHi")  # struct input_event on 64-bit Linux
 FULL = 350.0                    # SpaceNavigator axes run about -350..350
+DEAD = 0.06                     # a released SpaceNavigator rests a few percent off zero: smaller values count as zero
 
 
 def find_nav():
@@ -179,20 +181,19 @@ class Relay:
 
 
 def read_nav(path, sink=publish):
-    axes, buttons, state = [0.0] * 6, 0, {"changed": False}
+    axes, buttons = [0.0] * 6, 0
     lock = threading.Lock()
 
-    def sender():  # about 30 Hz while pushed, one zero message on release
-        sent_zero = True
+    def sender():  # about 30 Hz while pushed; at rest, only a change (the release, a button)
+        last = None
         while True:
             time.sleep(1 / 30)
             with lock:
-                a, b, changed = list(axes), buttons, state["changed"]
-                state["changed"] = False
-            moving = any(a)
-            if moving or changed or not sent_zero:
-                sink("nav", json.dumps({"a": [round(v, 3) for v in a], "b": b}))
-                sent_zero = not moving
+                a, b = list(axes), buttons
+            a = [round(v, 3) if abs(v) >= DEAD else 0.0 for v in a]
+            if any(a) or (a, b) != last:
+                sink("nav", json.dumps({"a": a, "b": b}))
+                last = (a, b)
 
     threading.Thread(target=sender, daemon=True).start()
     while True:
@@ -207,11 +208,9 @@ def read_nav(path, sink=publish):
                     with lock:
                         if typ in (EV_REL, EV_ABS) and code < 6:
                             axes[code] = max(-1.0, min(1.0, value / FULL))
-                            state["changed"] = True
                         elif typ == EV_KEY and 256 <= code < 264:  # BTN_0..
                             bit = 1 << (code - 256)
                             buttons = (buttons | bit) if value else (buttons & ~bit)
-                            state["changed"] = True
         except PermissionError:
             print("3D mouse: no permission to read %s (a udev rule or the 'input' group can grant it); carrying on without it" % path, file=sys.stderr)
             return
@@ -219,7 +218,6 @@ def read_nav(path, sink=publish):
             print("3D mouse: %s; retrying in 5 s" % e, file=sys.stderr)
         with lock:
             axes[:] = [0.0] * 6
-            state["changed"] = True
         time.sleep(5)
 
 
