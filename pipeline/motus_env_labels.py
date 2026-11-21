@@ -10,7 +10,7 @@
                       over about 0.6 degrees
   OUT_SAMPLE.geo.tax.tsv  SAMPLES.tax.tsv restricted to those samples
   OUT_SAMPLE.spots.tsv  the places with more than 5 samples (exact coordinates as given): lon, lat, samples, and
-                      the commonest sample source there, for place names on the map layout
+                      the commonest category one level above the sample source there, for place names on the map
   OUT_SAMPLE.info.tsv  per sample, for the viewer's tooltip while the environment labels are on: sample, study,
                       BioSample, lat, lon
   OUT_MOTU.info.tsv   per mOTU, the same: mOTU, its GTDB species (or genus), the number of samples and studies it
@@ -79,11 +79,15 @@ with open(out_s + ".geo.tsv", "w") as g, open(out_s + ".geo.tax.tsv", "w") as t:
         la2 = max(-89.9, min(89.9, float(la) + rad * np.sin(ang)))
         lo2 = (float(lo) + rad * np.cos(ang) / max(0.05, np.cos(np.radians(la2))) + 180) % 360 - 180
         g.write(f"{s}\t{lo2:.6f}\t{la2:.6f}\n"); t.write(s_rows[s])
-# spots with more than 5 samples, for place names on the map: the commonest sample source there, at the true spot
+# spots with more than 5 samples, for place names on the map, at the true spot
 spots = collections.defaultdict(list)
 for s, p in zip(samples, path):
     la, lo = coords(rows[s])
-    if la: spots[(la, lo)].append(p[-1] or next((x for x in reversed(p) if x), ""))
+    if la:
+        # one level above the sample source: the nearest ancestor whose name differs from it (Human stool's
+        # compartment is also Human stool, so those places read Human gut system)
+        named = [x for x in p if x]
+        spots[(la, lo)].append(next((x for x in reversed(named[:-1]) if x != named[-1]), named[-1] if named else ""))
 with open(out_s + ".spots.tsv", "w") as f:
     f.write("lon\tlat\tsamples\tname\n")
     for (la, lo), names in sorted(spots.items(), key=lambda x: -len(x[1])):

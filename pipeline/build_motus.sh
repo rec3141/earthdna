@@ -60,6 +60,8 @@ if [ -s "$raw/motusdb_org_samples.tsv" ]; then
     $py -I "$here/motus_env_labels.py" "$raw/motusdb_org_samples.tsv" "$raw" "$s.tax.tsv" "$p.abund.tax.tsv" "$s" "$p"
     env=(1)
 fi
+# every taxon each sample contains (>= 0.1%), for search, and its dominant taxon's share, for the tooltip
+$py -I "$here/motus_sample_taxa.py" "$raw" "$p.abund.tax.tsv" "$s.tax.tsv" "$s"
 
 # The 5-mer maps embed every mOTU with markers; the globe shows those that are also profiled (the abundance rows).
 # --dedup gives points whose neighbourhoods overlap heavily (chains of near-identical profiles, drawn as worms) less
@@ -94,7 +96,7 @@ $py -I "$here/pack_globe.py" "$p.abund.tax.tsv" "$work/globe_motus" \
 $py -I "$here/pack_globe.py" "$s.tax.tsv" "$work/globe_samples" \
     --layout similarity="$s.sphere.tsv" \
     --layout-label "similarity=mOTU composition|Placed by mOTU composition (Hellinger distance between relative abundance profiles)." \
-    --traits "$s.traits.tsv" --color study="$s.study_color.tsv" \
+    --traits "$s.traits.tsv" --color study="$s.study_color.tsv" --contains "$s.contains.npz" --tip-percent "$s.dompct.tsv" \
     ${env:+--labels "environment=Environment=$s.env.tsv" --labels-info "environment=$s.info.tsv" --default-labels environment} \
     --title "mOTUs-db 4.1 metagenomes" \
     --about "Metagenomes profiled by mOTUs-db 4.1, placed by their mOTU composition with spherical t-SNE (fastsne). Each is labelled by its most abundant taxon at every rank."
@@ -104,7 +106,7 @@ if [ -n "${env[*]}" ]; then
         --layout similarity="$s.geo.tsv" --geo-layout similarity --geo-labels "$s.spots.tsv" \
         --layout-label "similarity=Geography|Where each metagenome was sampled (samples sharing a spot are scattered around it, more widely the more there are)." \
         --labels "environment=Environment=$s.env.tsv" --labels-info "environment=$s.info.tsv" --default-labels environment \
-        --traits "$s.traits.tsv" --color study="$s.study_color.tsv" \
+        --traits "$s.traits.tsv" --color study="$s.study_color.tsv" --contains "$s.contains.npz" --tip-percent "$s.dompct.tsv" \
         --title "mOTUs-db 4.1 metagenomes with coordinates" \
         --about "The metagenomes of mOTUs-db 4.1 that have coordinates (motus-db.org), on the Earth where they were sampled."
 fi

@@ -21,6 +21,7 @@ usage: pack_globe.py OUT.tax.tsv OUTDIR --layout similarity=map.tsv [--layout sc
                      [--layout-label "NAME=Button text|Status line"] [--about "subtitle"]
                      [--labels "KEY=Display name=labels.tsv"] [--labels-info KEY=info.tsv] [--labels-tip "KEY=Mostly in"]
                      [--default-labels KEY] [--geo-layout NAME] [--geo-labels spots.tsv]
+                     [--contains contains.npz] [--tip-percent dompct.tsv]
   The first --layout is the one the viewer opens with. --layout-label names a layout's button and the line shown when
   it is chosen (the viewer has defaults for similarity and sculpt); --about replaces the viewer's subtitle, which
   otherwise describes an SSU globe.
@@ -34,6 +35,11 @@ usage: pack_globe.py OUT.tax.tsv OUTDIR --layout similarity=map.tsv [--layout sc
   lon/lat are places on Earth, which the viewer must show as they are (it otherwise turns each layout to suit it).
   --geo-labels names places on those layouts in place of the label-set names: spots.tsv has lon, lat, samples, name
   (globe.json geoLabels, biggest first).
+  --contains (motus_sample_taxa.py) lets a search find every point that contains a taxon, not only those it
+  labels: for each rank, contains_RANK.bin holds uint32 n, uint32 byte offsets[n + 1] (from the start of the
+  list area), then each taxon's points in this globe's order as LEB128 varint gaps (first gap from -1); globe.json
+  contains names the ranks and taxa. --tip-percent (id, percent) adds tippct.bin, one byte per point (255 = none):
+  the share of the point's named dominant taxon, for the tooltip.
   --color NAME=values.tsv: a header naming a column of OUT.tax.tsv (id, organism, ...) and one value column, then a
   row per key (fsb_gc.py writes id/gc). All-numeric values make a continuous scheme, anything else a categorical
   one (at most 255 categories, the commonest first). The viewer's schemes say how each is coloured.
@@ -53,6 +59,7 @@ ap.add_argument("--labels", action="append", default=[])
 ap.add_argument("--labels-info", action="append", default=[]); ap.add_argument("--labels-tip", action="append", default=[])
 ap.add_argument("--default-labels", default="")
 ap.add_argument("--geo-layout", action="append", default=[]); ap.add_argument("--geo-labels")
+ap.add_argument("--contains"); ap.add_argument("--tip-percent")
 ap.add_argument("--models", help="models globe: KEY=label;... (layouts named <shape>[-KEY]; the first KEY is empty), e.g. \"=Evo 2 7B;kmer=5-mers\"")
 a = ap.parse_args()
 os.makedirs(a.outdir, exist_ok=True)
@@ -187,6 +194,42 @@ for spec in a.labels_tip:
     key, text = spec.split("=", 1)
     next(x for x in label_sets if x["key"] == key)["tip"] = text
 assert not a.default_labels or any(x["key"] == a.default_labels for x in label_sets), "--default-labels: no such --labels"
+def varints(v):
+    """LEB128 bytes of non-negative ints"""
+    v = np.asarray(v, np.uint64); out = []
+    while True:
+        b = (v & 0x7F).astype(np.uint8); v = v >> np.uint64(7); more = v > 0
+        out.append(np.where(more, b | 0x80, b).astype(np.uint8))
+        if not more.any(): break
+    nb = 1 + sum((np.asarray(x) >= 0x80).astype(int) for x in out[:-1]) if len(out) > 1 else np.ones(len(v), int)
+    # interleave: value k's bytes are out[0][k], out[1][k], ... for its first nb[k] bytes
+    M = np.stack(out, 1); keep = np.arange(M.shape[1])[None, :] < nb[:, None]
+    return M[keep].tobytes()
+contains = None
+if a.contains:
+    Z = np.load(a.contains, allow_pickle=False)
+    row_of = {r[0]: k for k, r in enumerate(rows)}
+    inv = np.empty(N, np.int64); inv[perm] = np.arange(N)       # packed position of each tax.tsv row
+    pos_of = np.array([inv[row_of[s]] if s in row_of else -1 for s in Z["samples"]])
+    contains = dict(min=float(Z["min"]), ranks=[], names={})
+    for rk in ["phylum", "class", "order", "family", "genus", "species"]:
+        names, ptr, ind = Z[f"{rk}_names"], Z[f"{rk}_indptr"], Z[f"{rk}_indices"]
+        chunks, offs, kept = [], [0], []
+        for t in range(len(names)):
+            q = pos_of[ind[ptr[t]:ptr[t + 1]]]; q = np.sort(q[q >= 0])
+            if not len(q): continue
+            b = varints(np.diff(np.concatenate([[-1], q])))
+            chunks.append(b); offs.append(offs[-1] + len(b)); kept.append(str(names[t]))
+        with open(os.path.join(a.outdir, f"contains_{rk}.bin"), "wb") as f:
+            f.write(np.array([len(kept)], "<u4").tobytes()); f.write(np.array(offs, "<u4").tobytes()); f.write(b"".join(chunks))
+        contains["ranks"].append(rk); contains["names"][rk] = kept
+        print(f"contains {rk}: {len(kept)} taxa, {offs[-1] / 1e6:.1f} MB")
+if a.tip_percent:
+    with open(a.tip_percent) as tf:
+        next(tf); pc = {l.split("\t")[0]: float(l.split("\t")[1]) for l in tf}
+    tp = np.array([min(100, round(pc[r[0]])) if r[0] in pc else 255 for r in rows], np.uint8)
+    with open(os.path.join(a.outdir, "tippct.b64.txt"), "w") as f:
+        f.write(b64(tp[perm]))
 geo_labels = []
 if a.geo_labels:
     with open(a.geo_labels) as gf:
@@ -202,7 +245,8 @@ for spec in a.layout_label:
     layout_info[name] = dict(label=label, about=about)
 extra = dict(models=[dict(key=k, label=v) for k, v in (m.split("=", 1) for m in a.models.split(";"))]) if a.models else {}
 with open(os.path.join(a.outdir, "globe.json"), "w") as gf:
-    json.dump(dict(**extra, colors=colors, n=N, title=a.title, about=a.about, layouts=layouts, layoutInfo=layout_info, labelSets=label_sets, defaultLabels=a.default_labels, geoLayouts=a.geo_layout, geoLabels=geo_labels, flags=bool(a.flags), traits=trait_names, groups=groups, groupCounts=gcount,
+    json.dump(dict(**extra, colors=colors, n=N, title=a.title, about=a.about, layouts=layouts, layoutInfo=layout_info, labelSets=label_sets, defaultLabels=a.default_labels, geoLayouts=a.geo_layout, geoLabels=geo_labels,
+                   contains=contains, tipPercent=bool(a.tip_percent), flags=bool(a.flags), traits=trait_names, groups=groups, groupCounts=gcount,
                    genera=genera, lineages=[x[1:] for x in lineages], lineageRank="".join(x[0] for x in lineages),
                    species=species, speciesBytes=species_bytes, ranks=dict(levels=["domain"] + RANKS + ["genus", "species"], names=rank_names)),
               gf, separators=(",", ":"))
