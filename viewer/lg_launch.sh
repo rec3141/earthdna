@@ -12,6 +12,9 @@
 #              through an ssh forward from this machine, for when a firewall here blocks the port
 #   LG_PORT    default 8765          LG_BEZEL   css pixels hidden behind each bezel, default 0
 #   LG_EXTRA   more query parameters for every screen, e.g. "dome=30&navspeed=1.5"
+#   LG_EXHIBIT the full-screen videos and pictures some screens open at login (~/.config/autostart: vlc-video.desktop,
+#              fullscreen-image.desktop) sit on top of the browser, so start closes them and stop reopens them
+#              from those same entries; "keep" leaves them alone
 #
 # Screens that are switched off are skipped; the others still show their own slice.
 # Google Earth keeps running underneath; the browsers cover it.
@@ -32,17 +35,34 @@ on() { local host=$1; shift; if [ "$host" = "$(hostname -s)" ]; then bash -c "$*
 # only Firefox started with this profile; the bracket keeps pkill from matching the shell that runs it
 STOP_BROWSER="pkill -f '[f]irefox .*--profile .*earthdna-wall' ; true"
 
+EXHIBIT=${LG_EXHIBIT:-}
+EXHIBIT_APPS="vlc-video.desktop fullscreen-image.desktop"
+EXHIBIT_STOP="pkill -x vlc ; pkill -x lximage-qt ; true"
+# reopen each exhibit entry that has nothing running for it
+EXHIBIT_START="cd ~/.config/autostart 2>/dev/null || exit 0
+for f in $EXHIBIT_APPS; do
+  [ -f \$f ] || continue
+  cmd=\$(sed -n 's/^Exec=//p' \$f | head -1); bin=\$(basename \$(echo \$cmd | cut -d' ' -f1))
+  pgrep -x \$bin >/dev/null || (DISPLAY=:0 nohup sh -c \"\$cmd\" >/dev/null 2>&1 &)
+done"
+
 stop_all() {
   for h in $ORDER; do on "$h" "$STOP_BROWSER" 2>/dev/null & done; wait
   pkill -f "[s]sh .*-R $PORT:127.0.0.1:$PORT" ; true
   pkill -f "[l]g_server.py.*--port $PORT" ; true
 }
 
-if [ "${1:-}" = stop ]; then stop_all; echo "stopped"; exit 0; fi
+if [ "${1:-}" = stop ]; then
+  stop_all
+  [ "$EXHIBIT" = keep ] || for h in $ORDER; do on "$h" "$EXHIBIT_START" 2>/dev/null & done; wait
+  echo "stopped"; exit 0
+fi
 [ $# -ge 1 ] && [ -f "$1/globe.json" ] || { echo "usage: $0 GLOBE_DIR | stop   (GLOBE_DIR holds globe.json)" >&2; exit 2; }
 globe=$(cd "$1" && pwd)
 
-stop_all; sleep 1
+stop_all
+[ "$EXHIBIT" = keep ] || for h in $ORDER; do on "$h" "$EXHIBIT_STOP" 2>/dev/null & done; wait
+sleep 1
 nohup python3 "$here/lg_server.py" "$globe" --port "$PORT" --viewer "$here/globe.html" > "$HOME/.earthdna-wall-server.log" 2>&1 &
 up() { python3 -c "import urllib.request as u; u.urlopen('http://127.0.0.1:$PORT/globe.json', timeout=2).read()" 2>/dev/null; }
 for _ in $(seq 20); do up && break; sleep 0.5; done
