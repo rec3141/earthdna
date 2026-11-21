@@ -187,6 +187,7 @@ def main():
     ap.add_argument("--viewer", help="serve this file as / instead of ROOT/index.html (for working on the viewer)")
     ap.add_argument("--nav", default="auto", help="3D mouse input device: auto, a /dev/input path, or off")
     args = ap.parse_args()
+    sys.stderr.reconfigure(line_buffering=True)  # a log file sees each line as it happens
 
     Handler.viewer = os.path.abspath(args.viewer) if args.viewer else None
     if args.nav != "off":

@@ -42,8 +42,9 @@ globe=$(cd "$1" && pwd)
 
 stop_all; sleep 1
 nohup python3 "$here/lg_server.py" "$globe" --port "$PORT" --viewer "$here/globe.html" > "$HOME/.earthdna-wall-server.log" 2>&1 &
-for _ in $(seq 20); do curl -s -o /dev/null "http://127.0.0.1:$PORT/globe.json" && break; sleep 0.5; done
-curl -s -o /dev/null "http://127.0.0.1:$PORT/globe.json" || { echo "the server did not start; see ~/.earthdna-wall-server.log" >&2; exit 1; }
+up() { python3 -c "import urllib.request as u; u.urlopen('http://127.0.0.1:$PORT/globe.json', timeout=2)" 2>/dev/null; }
+for _ in $(seq 20); do up && break; sleep 0.5; done
+up || { echo "the server did not start; see ~/.earthdna-wall-server.log" >&2; exit 1; }
 
 # Firefox profile: WebGL on whatever the card is, no first-run pages, no restore prompts
 PREFS='user_pref("webgl.force-enabled", true);
