@@ -20,7 +20,7 @@ usage: pack_globe.py OUT.tax.tsv OUTDIR --layout similarity=map.tsv [--layout sc
                      [--traits traits.tsv] [--color gc=gc.tsv ...] [--title "SILVA 144 SSU Ref NR99"]
                      [--layout-label "NAME=Button text|Status line"] [--about "subtitle"]
                      [--labels "KEY=Display name=labels.tsv"] [--labels-info KEY=info.tsv] [--labels-tip "KEY=Mostly in"]
-                     [--default-labels KEY] [--geo-layout NAME]
+                     [--default-labels KEY] [--geo-layout NAME] [--geo-labels spots.tsv]
   The first --layout is the one the viewer opens with. --layout-label names a layout's button and the line shown when
   it is chosen (the viewer has defaults for similarity and sculpt); --about replaces the viewer's subtitle, which
   otherwise describes an SSU globe.
@@ -32,6 +32,8 @@ usage: pack_globe.py OUT.tax.tsv OUTDIR --layout similarity=map.tsv [--layout sc
   info_KEY.txt, one tab-separated line per point; --labels-tip words go before the label path in that tooltip.
   --default-labels opens the globe on that label set instead of the taxonomy. --geo-layout marks a layout whose
   lon/lat are places on Earth, which the viewer must show as they are (it otherwise turns each layout to suit it).
+  --geo-labels names places on those layouts in place of the label-set names: spots.tsv has lon, lat, samples, name
+  (globe.json geoLabels, biggest first).
   --color NAME=values.tsv: a header naming a column of OUT.tax.tsv (id, organism, ...) and one value column, then a
   row per key (fsb_gc.py writes id/gc). All-numeric values make a continuous scheme, anything else a categorical
   one (at most 255 categories, the commonest first). The viewer's schemes say how each is coloured.
@@ -50,7 +52,7 @@ ap.add_argument("--layout-label", action="append", default=[]); ap.add_argument(
 ap.add_argument("--labels", action="append", default=[])
 ap.add_argument("--labels-info", action="append", default=[]); ap.add_argument("--labels-tip", action="append", default=[])
 ap.add_argument("--default-labels", default="")
-ap.add_argument("--geo-layout", action="append", default=[])
+ap.add_argument("--geo-layout", action="append", default=[]); ap.add_argument("--geo-labels")
 ap.add_argument("--models", help="models globe: KEY=label;... (layouts named <shape>[-KEY]; the first KEY is empty), e.g. \"=Evo 2 7B;kmer=5-mers\"")
 a = ap.parse_args()
 os.makedirs(a.outdir, exist_ok=True)
@@ -185,6 +187,13 @@ for spec in a.labels_tip:
     key, text = spec.split("=", 1)
     next(x for x in label_sets if x["key"] == key)["tip"] = text
 assert not a.default_labels or any(x["key"] == a.default_labels for x in label_sets), "--default-labels: no such --labels"
+geo_labels = []
+if a.geo_labels:
+    with open(a.geo_labels) as gf:
+        next(gf)
+        for l in gf:
+            lo, la, n, name = l.rstrip("\n").split("\t")
+            geo_labels.append(dict(lon=float(lo), lat=float(la), n=int(n), text=name))
 layout_info = {}
 for spec in a.layout_label:
     name, text = spec.split("=", 1)
@@ -193,7 +202,7 @@ for spec in a.layout_label:
     layout_info[name] = dict(label=label, about=about)
 extra = dict(models=[dict(key=k, label=v) for k, v in (m.split("=", 1) for m in a.models.split(";"))]) if a.models else {}
 with open(os.path.join(a.outdir, "globe.json"), "w") as gf:
-    json.dump(dict(**extra, colors=colors, n=N, title=a.title, about=a.about, layouts=layouts, layoutInfo=layout_info, labelSets=label_sets, defaultLabels=a.default_labels, geoLayouts=a.geo_layout, flags=bool(a.flags), traits=trait_names, groups=groups, groupCounts=gcount,
+    json.dump(dict(**extra, colors=colors, n=N, title=a.title, about=a.about, layouts=layouts, layoutInfo=layout_info, labelSets=label_sets, defaultLabels=a.default_labels, geoLayouts=a.geo_layout, geoLabels=geo_labels, flags=bool(a.flags), traits=trait_names, groups=groups, groupCounts=gcount,
                    genera=genera, lineages=[x[1:] for x in lineages], lineageRank="".join(x[0] for x in lineages),
                    species=species, speciesBytes=species_bytes, ranks=dict(levels=["domain"] + RANKS + ["genus", "species"], names=rank_names)),
               gf, separators=(",", ":"))
