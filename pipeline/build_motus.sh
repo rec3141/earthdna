@@ -24,7 +24,7 @@
 #     environment labels
 # env: FASTSNE (fastsne binary, GPU), PYTHON (python3 with numpy, scipy, scikit-learn), ANCHOR (spring weights
 #   domain,phylum,class,order; build_gtdb.sh's, since mOTUs are also ~97% Bacteria and SILVA's domain pull squeezes them
-#   into one cap), ANCHOR_ABUND (the same for sculpt-abund), DEDUP (fastsne --dedup, 2)
+#   into one cap), ANCHOR_ABUND (the same for sculpt-abund), DEDUP (fastsne --dedup, 2), EXAG_SAMPLES (--exag for the sample layout, 2)
 # The CPU steps take a few minutes and about 3 GB; each fastsne run is under a minute on one 20 GB GPU.
 set -euo pipefail
 raw=$1; work=$2
@@ -74,7 +74,8 @@ run "$p.abund.sphere.tsv" -i "$p.abund.fsb" --transform none --pca 128
 # no domain spring here: co-occurrence mixes taxa, and one Bacteria centroid pulls the whole map into a cap
 run "$p.abund.sculpt.tsv" -i "$p.abund.fsb" --transform none --pca 128 --anchor-file "$p.abund.anchor" \
     --anchor "${ANCHOR_ABUND:-0,0.0002,0.0002,0.000025}"
-run "$s.sphere.tsv" -i "$s.fsb" --transform none --pca 128
+# exaggeration 2 opens sea between the habitats (the sphere goes from 44% to 32% occupied, neighbours unchanged)
+run "$s.sphere.tsv" -i "$s.fsb" --transform none --pca 128 --exag "${EXAG_SAMPLES:-2}"
 
 ts "viewer data"
 [ -s "$p.conflicts.tsv" ] || $py -I "$here/conflicts.py" "$p.tax.tsv" "$p.knn" 48 "$p.conflicts.tsv"
