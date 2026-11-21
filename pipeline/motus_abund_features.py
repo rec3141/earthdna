@@ -7,8 +7,9 @@
   OUT_MOTU.tax.tsv   TAX restricted to the same mOTUs (the shared point set of the three mOTU layouts)
   OUT_SAMPLE.fsb     one row per sample: its mOTU composition (relative abundance over assigned mOTUs, the
                      mOTUv4.0_unassigned bin left out), Hellinger, then a 128-d sparse SVD
-  OUT_SAMPLE.tax.tsv EarthDNA taxonomy columns filled with each sample's most abundant taxon at each rank
-                     (summed relative abundance of the mOTUs carrying that label); organism = sample id
+  OUT_SAMPLE.tax.tsv EarthDNA taxonomy columns filled with each sample's dominant lineage (summed relative
+                     abundance of the mOTUs carrying each label), chosen top down so the ranks nest: the most
+                     abundant phylum, the most abundant class inside it, and so on; organism = sample id
   OUT_SAMPLE.study.tsv  sample -> study
   OUT_SAMPLE.traits.tsv  per-sample traits for pack_globe.py --traits
 
@@ -79,19 +80,30 @@ S = (sp.diags(1 / np.where(empty, 1, asum)) @ A).tocsr()[~empty]
 smp = samples[~empty]
 write_fsb(a.out_sample + ".fsb", svd(S.sqrt(), "samples"), list(smp))
 
-# dominant taxon per rank: summed relative abundance of the mOTUs carrying each label
+# dominant taxon per rank, chosen top down so the ranks nest: the domain with the largest summed relative abundance,
+# then the largest phylum inside that domain, and so on to species. Chosen rank by rank, a sample's dominant family
+# could sit outside its dominant order (one Cyanobiaceae species can outweigh several Pelagibacteraceae).
 C = {h: i for i, h in enumerate(header)}
 RANKS = ["domain", "phylum", "class", "order", "family", "genus", "species"]
 dom = {}
-for rk in RANKS:
-    lab = np.array([r[C[rk]] for r in keep])
-    names, code = np.unique(lab, return_inverse=True)
-    ok = lab != ""
-    M = sp.csr_matrix((np.ones(ok.sum(), np.float32), (np.flatnonzero(ok), code[ok])), shape=(len(keep), len(names)))
-    T = (S @ M).tocsr()
+chosen = np.full(len(smp), -1)                              # code of each sample's path so far (-1 = the root)
+prev = {(): -1}
+for k, rk in enumerate(RANKS):
+    path = [tuple(r[C[q]] for q in RANKS[:k + 1]) for r in keep]
+    keys = sorted({x for x in path if all(x)})
+    ix = {x: j for j, x in enumerate(keys)}
+    ok = np.array([all(x) for x in path])
+    M = sp.csr_matrix((np.ones(ok.sum(), np.float32), (np.flatnonzero(ok), [ix[x] for x in path if all(x)])),
+                      shape=(len(keep), len(keys)))
+    T = (S @ M).tocoo()
+    parent = np.array([prev.get(x[:-1], -2) for x in keys])
+    m = parent[T.col] == chosen[T.row]                          # only the children of the path chosen so far
+    T = sp.csr_matrix((T.data[m], (T.row[m], T.col[m])), shape=T.shape)
     best = np.asarray(T.argmax(1)).ravel()
     has = np.asarray(T.max(1).todense()).ravel() > 0
-    dom[rk] = np.where(has, names[best], "")
+    dom[rk] = np.where(has, np.array([x[-1] for x in keys] or [""], dtype=object)[np.where(has, best, 0)], "")
+    chosen = np.where(has, best, -3)                            # a sample with no child here stays blank below
+    prev = ix
 fam_ok = dom["family"] != ""
 with open(a.out_sample + ".tax.tsv", "w") as f:
     f.write("\t".join(header) + "\n")
