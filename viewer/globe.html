@@ -1452,7 +1452,8 @@ async function applyState(s) {
 // Tilting and sliding turn the globe, twisting rolls it, pushing down zooms in. With a fragment open, sliding
 // sideways runs along the sequence and pushing goes deeper. Left button: clear / close. Right button: spin.
 const nav = { a: [0, 0, 0, 0, 0, 0], b: 0, at: 0 }, NAVK = +(Q.get("navspeed") || 1);
-const navActive = () => nav.a.some((v) => v !== 0) && performance.now() - nav.at < 1000;  // a lost release ends after 1 s
+// pushed past the dead zone (a released device rests slightly off zero); a lost release ends after 1 s
+const navActive = () => nav.a.some((v) => Math.abs(v) >= 0.06) && performance.now() - nav.at < 1000;
 function applyNav(dt) {
   const dz = (v) => Math.abs(v) < 0.06 ? 0 : v, [x, y, z, rx, ry, rz] = nav.a.map(dz);
   if (det) {
