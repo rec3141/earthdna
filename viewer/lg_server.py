@@ -2,6 +2,7 @@
 """Serve a built globe to every screen of a multi-screen wall and keep the screens in step.
 
     python3 lg_server.py work/globe [--port 8765] [--viewer viewer/globe.html] [--nav auto|PATH|off]
+    python3 lg_server.py --relay https://microscape.app/earthdna/sync/ROOM [--nav auto|PATH]
 
   GET  /...           files from the globe directory (/ is its index.html, or --viewer's file)
   GET  /sync/events   server-sent events: the leader's latest state (default event), 3D mouse axes ("nav")
@@ -9,6 +10,9 @@
   POST /sync/log      a screen's error message, written to this server's log
 
 Each screen opens  http://SERVER:PORT/?sync&wall=COLS&screen=I  (one with &lead), see globe.html.
+
+With --relay the screens sync through a hosted copy of the viewer instead (microscape.app's /earthdna pages with
+?sync=ROOM): nothing is served here, and the 3D mouse's axes are posted to the relay's /nav.
 
 The 3D mouse (3Dconnexion SpaceNavigator and relatives) is read from its Linux input device: the first device whose
 name mentions 3Dconnexion, SpaceNavigator or SpaceMouse (or /dev/input/spacenavigator, which Liquid Galaxy's udev rule
@@ -26,6 +30,8 @@ import struct
 import sys
 import threading
 import time
+import http.client
+import urllib.parse
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -142,7 +148,37 @@ def find_nav():
     return None
 
 
-def read_nav(path):
+class Relay:
+    """posts 3D mouse axes to a hosted room's /nav over one kept-alive connection; a failed post is dropped"""
+
+    def __init__(self, url):
+        u = urllib.parse.urlsplit(url.rstrip("/"))
+        self.https, self.host, self.path = u.scheme == "https", u.netloc, u.path + "/nav"
+        self.conn, self.warned = None, False
+
+    def __call__(self, event, data):
+        if event != "nav":
+            return
+        for attempt in (0, 1):  # once more on a fresh connection if the kept one has gone
+            try:
+                if self.conn is None:
+                    cls = http.client.HTTPSConnection if self.https else http.client.HTTPConnection
+                    self.conn = cls(self.host, timeout=5)
+                self.conn.request("POST", self.path, body=data, headers={"Content-Type": "application/json"})
+                r = self.conn.getresponse()
+                r.read()
+                if r.status >= 400 and not self.warned:
+                    print("relay: %s answered %d" % (self.host, r.status), file=sys.stderr)
+                    self.warned = True
+                return
+            except (OSError, http.client.HTTPException) as e:
+                self.conn = None
+                if attempt and not self.warned:
+                    print("relay: %s (axes dropped until it answers)" % e, file=sys.stderr)
+                    self.warned = True
+
+
+def read_nav(path, sink=publish):
     axes, buttons, state = [0.0] * 6, 0, {"changed": False}
     lock = threading.Lock()
 
@@ -155,7 +191,7 @@ def read_nav(path):
                 state["changed"] = False
             moving = any(a)
             if moving or changed or not sent_zero:
-                publish("nav", json.dumps({"a": [round(v, 3) for v in a], "b": b}))
+                sink("nav", json.dumps({"a": [round(v, 3) for v in a], "b": b}))
                 sent_zero = not moving
 
     threading.Thread(target=sender, daemon=True).start()
@@ -189,7 +225,8 @@ def read_nav(path):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("root", help="built globe directory (pipeline/build.sh's work/globe)")
+    ap.add_argument("root", nargs="?", help="built globe directory (pipeline/build.sh's work/globe); not with --relay")
+    ap.add_argument("--relay", help="a hosted room (https://HOST/earthdna/sync/ROOM): post the 3D mouse there, serve nothing")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--bind", default="0.0.0.0")
     ap.add_argument("--viewer", help="serve this file as / instead of ROOT/index.html (for working on the viewer)")
@@ -197,13 +234,23 @@ def main():
     args = ap.parse_args()
     sys.stderr.reconfigure(line_buffering=True)  # a log file sees each line as it happens
 
-    Handler.viewer = os.path.abspath(args.viewer) if args.viewer else None
+    if bool(args.root) == bool(args.relay):
+        ap.error("give either a globe directory or --relay")
+    sink = Relay(args.relay) if args.relay else publish
     if args.nav != "off":
         path = find_nav() if args.nav == "auto" else args.nav
         if path:
-            threading.Thread(target=read_nav, args=(path,), daemon=True).start()
+            threading.Thread(target=read_nav, args=(path, sink), daemon=True).start()
         else:
             print("3D mouse: none found", file=sys.stderr)
+    if args.relay:
+        print("relaying the 3D mouse to %s" % args.relay, file=sys.stderr)
+        try:
+            while True:
+                time.sleep(3600)
+        except KeyboardInterrupt:
+            return
+    Handler.viewer = os.path.abspath(args.viewer) if args.viewer else None
     server = ThreadingHTTPServer((args.bind, args.port), partial(Handler, directory=os.path.abspath(args.root)))
     server.daemon_threads = True
     print("serving %s on http://%s:%d/" % (args.root, args.bind, args.port), file=sys.stderr)
