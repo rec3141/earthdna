@@ -8,7 +8,8 @@
 # Settings (environment):
 #   LG_ORDER   screens left to right, as ssh host names       default "lg6 lg7 lg8 lg1 lg2 lg3 lg4 lg5"
 #   LG_LEAD    the screen that leads at start, shows the controls and takes the 3D mouse    default: this host
-#   LG_SERVER  address the screens reach this machine on      default 10.42.42.1
+#   LG_SERVER  address the screens reach this machine on, or "tunnel" (default): each screen reaches the server
+#              through an ssh forward from this machine, for when a firewall here blocks the port
 #   LG_PORT    default 8765          LG_BEZEL   css pixels hidden behind each bezel, default 0
 #   LG_EXTRA   more query parameters for every screen, e.g. "dome=30&navspeed=1.5"
 #
@@ -18,7 +19,7 @@ set -u
 here=$(cd "$(dirname "$0")" && pwd)
 ORDER=${LG_ORDER:-"lg6 lg7 lg8 lg1 lg2 lg3 lg4 lg5"}
 LEAD=${LG_LEAD:-$(hostname -s)}
-SERVER=${LG_SERVER:-10.42.42.1}
+SERVER=${LG_SERVER:-tunnel}
 PORT=${LG_PORT:-8765}
 BEZEL=${LG_BEZEL:-0}
 EXTRA=${LG_EXTRA:-}
@@ -33,6 +34,7 @@ STOP_BROWSER="pkill -f '[f]irefox .*--profile .*earthdna-wall' ; true"
 
 stop_all() {
   for h in $ORDER; do on "$h" "$STOP_BROWSER" 2>/dev/null & done; wait
+  pkill -f "[s]sh .*-R $PORT:127.0.0.1:$PORT" ; true
   pkill -f "[l]g_server.py.*--port $PORT" ; true
 }
 
@@ -42,7 +44,7 @@ globe=$(cd "$1" && pwd)
 
 stop_all; sleep 1
 nohup python3 "$here/lg_server.py" "$globe" --port "$PORT" --viewer "$here/globe.html" > "$HOME/.earthdna-wall-server.log" 2>&1 &
-up() { python3 -c "import urllib.request as u; u.urlopen('http://127.0.0.1:$PORT/globe.json', timeout=2)" 2>/dev/null; }
+up() { python3 -c "import urllib.request as u; u.urlopen('http://127.0.0.1:$PORT/globe.json', timeout=2).read()" 2>/dev/null; }
 for _ in $(seq 20); do up && break; sleep 0.5; done
 up || { echo "the server did not start; see ~/.earthdna-wall-server.log" >&2; exit 1; }
 
@@ -57,7 +59,15 @@ user_pref("browser.startup.homepage_override.mstone", "ignore");'
 
 cols=$(wc -w <<< "$ORDER"); i=0
 for h in $ORDER; do
-  url="http://$SERVER:$PORT/?sync&wall=$cols&screen=$i&bezel=$BEZEL"
+  host=$SERVER
+  if [ "$SERVER" = tunnel ]; then
+    host=127.0.0.1
+    if [ "$h" != "$(hostname -s)" ]; then
+      $SSH -f -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -R "$PORT:127.0.0.1:$PORT" "$h" 2>/dev/null \
+        || { echo "screen $i: $h is not answering, skipped"; i=$((i + 1)); continue; }
+    fi
+  fi
+  url="http://$host:$PORT/?sync&wall=$cols&screen=$i&bezel=$BEZEL"
   [ "$h" = "$LEAD" ] && url="$url&lead&ui=1"
   [ -n "$EXTRA" ] && url="$url&$EXTRA"
   if on "$h" "mkdir -p $PROFILE && printf '%s\n' '$PREFS' > $PROFILE/user.js && (DISPLAY=:0 nohup firefox --no-remote --profile $PROFILE --kiosk '$url' >/dev/null 2>&1 &)" 2>/dev/null; then
