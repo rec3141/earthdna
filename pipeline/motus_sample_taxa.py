@@ -4,7 +4,8 @@ dominates), and how abundant its dominant taxon is, for the tooltip.
 
   OUT.contains.npz  the samples of SAMPLES.tax.tsv (array "samples") and, for each rank (phylum .. species), the
                     taxa present in at least one sample at >= MIN relative abundance ("<rank>_names") with the
-                    samples carrying each, as CSR over sample rows ("<rank>_indptr", "<rank>_indices")
+                    samples carrying each, as CSR over sample rows ("<rank>_indptr", "<rank>_indices"), and the
+                    taxon's summed relative abundance in each of them ("<rank>_data")
   OUT.dompct.tsv    id, percent: the relative abundance of the sample's dominant species as SAMPLES.tax.tsv names it
                     (or of its dominant genus when no species is named), as a percent of all its inserts
   OUT.info.tsv      (rewritten when present) gains a Dominant column: "34% Escherichia coli"
@@ -53,6 +54,7 @@ for rk in RANKS:
     out[f"{rk}_names"] = names[keep]
     out[f"{rk}_indptr"] = T.indptr.astype(np.int64)
     out[f"{rk}_indices"] = T.indices.astype(np.int32)
+    out[f"{rk}_data"] = T.data.astype(np.float32)                 # relative abundance, aligned with indices
     print(f"{rk}: {len(keep)} taxa present at >= {a.min:.1%} somewhere, {T.nnz} sample-taxon pairs")
 np.savez_compressed(a.out + ".contains.npz", **out)
 

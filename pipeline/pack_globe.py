@@ -38,7 +38,9 @@ usage: pack_globe.py OUT.tax.tsv OUTDIR --layout similarity=map.tsv [--layout sc
   --contains (motus_sample_taxa.py) lets a search find every point that contains a taxon, not only those it
   labels: for each rank, contains_RANK.bin holds uint32 n, uint32 byte offsets[n + 1] (from the start of the
   list area), then each taxon's points in this globe's order as LEB128 varint gaps (first gap from -1); globe.json
-  contains names the ranks and taxa. --tip-percent (id, percent) adds tippct.bin, one byte per point (255 = none):
+  contains names the ranks and taxa. When the input has abundances, abund_RANK.bin holds uint32 n, uint32 member
+  offsets[n + 1], then one byte per member in the same order: 1 + round(80 * log10(relative abundance / min))
+  (contains.abund in globe.json; min is contains.min), for the tooltip of a picked taxon. --tip-percent (id, percent) adds tippct.bin, one byte per point (255 = none):
   the share of the point's named dominant taxon, for the tooltip.
   --color NAME=values.tsv: a header naming a column of OUT.tax.tsv (id, organism, ...) and one value column, then a
   row per key (fsb_gc.py writes id/gc). All-numeric values make a continuous scheme, anything else a categorical
@@ -214,12 +216,21 @@ if a.contains:
     contains = dict(min=float(Z["min"]), ranks=[], names={})
     for rk in ["phylum", "class", "order", "family", "genus", "species"]:
         names, ptr, ind = Z[f"{rk}_names"], Z[f"{rk}_indptr"], Z[f"{rk}_indices"]
-        chunks, offs, kept = [], [0], []
+        val = Z[f"{rk}_data"] if f"{rk}_data" in Z else None
+        chunks, offs, kept, ab, aoffs = [], [0], [], [], [0]
         for t in range(len(names)):
-            q = pos_of[ind[ptr[t]:ptr[t + 1]]]; q = np.sort(q[q >= 0])
+            q = pos_of[ind[ptr[t]:ptr[t + 1]]]; ok = q >= 0; o = np.argsort(q[ok]); q = q[ok][o]
             if not len(q): continue
             b = varints(np.diff(np.concatenate([[-1], q])))
             chunks.append(b); offs.append(offs[-1] + len(b)); kept.append(str(names[t]))
+            if val is not None:
+                v = val[ptr[t]:ptr[t + 1]][ok][o]
+                ab.append(np.clip(1 + np.round(80 * np.log10(np.maximum(v, float(Z["min"])) / float(Z["min"]))), 1, 255).astype(np.uint8))
+                aoffs.append(aoffs[-1] + len(q))
+        if val is not None:
+            with open(os.path.join(a.outdir, f"abund_{rk}.bin"), "wb") as f:
+                f.write(np.array([len(kept)], "<u4").tobytes()); f.write(np.array(aoffs, "<u4").tobytes()); f.write(np.concatenate(ab).tobytes())
+            contains["abund"] = True
         with open(os.path.join(a.outdir, f"contains_{rk}.bin"), "wb") as f:
             f.write(np.array([len(kept)], "<u4").tobytes()); f.write(np.array(offs, "<u4").tobytes()); f.write(b"".join(chunks))
         contains["ranks"].append(rk); contains["names"][rk] = kept
