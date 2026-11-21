@@ -15,9 +15,13 @@
 #   LG_EXHIBIT the full-screen videos and pictures some screens open at login (~/.config/autostart: vlc-video.desktop,
 #              fullscreen-image.desktop) sit on top of the browser, so start closes them and stop reopens them
 #              from those same entries; "keep" leaves them alone
+#   LG_EARTH   Google Earth's restart loop (~/my_restart.sh, started from cron) brings Earth back over the browser
+#              whenever it exits, and Earth shares the graphics card; start stops the loop and Earth on each screen
+#              where the loop runs, and stop starts the loop again there; "keep" leaves them alone
 #
 # Screens that are switched off are skipped; the others still show their own slice.
-# Google Earth keeps running underneath; the browsers cover it.
+# A Firefox unpacked in ~/firefox on a screen's machine is used there instead of the system one (for a machine
+# whose packaged Firefox is too old to draw the globe smoothly and cannot be upgraded without root).
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 ORDER=${LG_ORDER:-"lg6 lg7 lg8 lg1 lg2 lg3 lg4 lg5"}
@@ -46,6 +50,12 @@ for f in $EXHIBIT_APPS; do
   pgrep -x \$bin >/dev/null || (DISPLAY=:0 nohup sh -c \"\$cmd\" >/dev/null 2>&1 &)
 done"
 
+EARTH=${LG_EARTH:-}
+MARK='$HOME/.earthdna-wall-paused-earth'
+# the brackets keep pkill from matching the shell that runs it
+EARTH_STOP="if pgrep -f '[m]y_restart.sh' >/dev/null; then touch $MARK; pkill -f '[m]y_restart.sh'; pkill -f '[g]oogleearth'; fi; true"
+EARTH_START="if [ -f $MARK ]; then rm -f $MARK; pgrep -f '[m]y_restart.sh' >/dev/null || (DISPLAY=:0 setsid nohup \$HOME/my_restart.sh >/dev/null 2>&1 &); fi; true"
+
 stop_all() {
   for h in $ORDER; do on "$h" "$STOP_BROWSER" 2>/dev/null & done; wait
   pkill -f "[s]sh .*-R $PORT:127.0.0.1:$PORT" ; true
@@ -55,14 +65,16 @@ stop_all() {
 if [ "${1:-}" = stop ]; then
   stop_all
   [ "$EXHIBIT" = keep ] || for h in $ORDER; do on "$h" "$EXHIBIT_START" 2>/dev/null & done; wait
-  echo "stopped"; exit 0
+  [ "$EARTH" = keep ] || for h in $ORDER; do on "$h" "$EARTH_START" 2>/dev/null & done; wait
+  echo "stopped; Google Earth comes back in about a minute"; exit 0
 fi
 [ $# -ge 1 ] && [ -f "$1/globe.json" ] || { echo "usage: $0 GLOBE_DIR | stop   (GLOBE_DIR holds globe.json)" >&2; exit 2; }
 globe=$(cd "$1" && pwd)
 
 stop_all
 [ "$EXHIBIT" = keep ] || for h in $ORDER; do on "$h" "$EXHIBIT_STOP" 2>/dev/null & done; wait
-sleep 1
+[ "$EARTH" = keep ] || for h in $ORDER; do on "$h" "$EARTH_STOP" 2>/dev/null & done; wait
+sleep 2
 nohup python3 "$here/lg_server.py" "$globe" --port "$PORT" --viewer "$here/globe.html" > "$HOME/.earthdna-wall-server.log" 2>&1 &
 up() { python3 -c "import urllib.request as u; u.urlopen('http://127.0.0.1:$PORT/globe.json', timeout=2).read()" 2>/dev/null; }
 for _ in $(seq 20); do up && break; sleep 0.5; done
@@ -90,7 +102,7 @@ for h in $ORDER; do
   url="http://$host:$PORT/?sync&wall=$cols&screen=$i&bezel=$BEZEL"
   [ "$h" = "$LEAD" ] && url="$url&lead&ui=1"
   [ -n "$EXTRA" ] && url="$url&$EXTRA"
-  if on "$h" "mkdir -p $PROFILE && printf '%s\n' '$PREFS' > $PROFILE/user.js && (DISPLAY=:0 nohup firefox --no-remote --profile $PROFILE --kiosk '$url' >/dev/null 2>&1 &)" 2>/dev/null; then
+  if on "$h" "mkdir -p $PROFILE && printf '%s\n' '$PREFS' > $PROFILE/user.js && (ff=firefox; [ -x \$HOME/firefox/firefox ] && ff=\$HOME/firefox/firefox; DISPLAY=:0 nohup \$ff --no-remote --profile $PROFILE --kiosk '$url' >/dev/null 2>&1 &)" 2>/dev/null; then
     echo "screen $i: $h"
   else
     echo "screen $i: $h is not answering, skipped"

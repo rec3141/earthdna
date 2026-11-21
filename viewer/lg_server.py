@@ -6,6 +6,7 @@
   GET  /...           files from the globe directory (/ is its index.html, or --viewer's file)
   GET  /sync/events   server-sent events: the leader's latest state (default event), 3D mouse axes ("nav")
   POST /sync/state    the leading screen's state, passed on to every screen and kept for screens that join later
+  POST /sync/log      a screen's error message, written to this server's log
 
 Each screen opens  http://SERVER:PORT/?sync&wall=COLS&screen=I  (one with &lead), see globe.html.
 
@@ -71,11 +72,18 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         global last_state
-        if self.path.split("?")[0] != "/sync/state":
-            self.send_error(404)
-            return
+        path = self.path.split("?")[0]
         n = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(n)
+        if path == "/sync/log":  # a screen's error report
+            print("screen error: %s" % body.decode("utf-8", "replace")[:2000], file=sys.stderr)
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path != "/sync/state":
+            self.send_error(404)
+            return
         try:
             json.loads(body)
         except ValueError:

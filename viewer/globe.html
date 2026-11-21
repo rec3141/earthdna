@@ -159,6 +159,12 @@ body.clean { background: #000; cursor: none; }
 const canvas = document.getElementById("gl");
 const $ = (id) => document.getElementById(id);
 const Q = new URLSearchParams(location.search);
+if (Q.has("sync")) {  // on a wall nobody sees the screens' consoles: errors go to the server's log
+  const report = (m) => fetch((Q.get("sync") || "sync").replace(/\/$/, "") + "/log", { method: "POST", body: `screen ${Q.get("screen") || "?"} (${navigator.userAgent.match(/Firefox\/[\d.]+|Chrome\/[\d.]+/) || ""}): ${m}` }).catch(() => {});
+  addEventListener("error", (e) => report(`${e.message} at ${e.lineno}:${e.colno}`));
+  addEventListener("unhandledrejection", (e) => report(`unhandled: ${(e.reason && (e.reason.stack || e.reason.message)) || e.reason}`));
+  window.reportToServer = report;
+}
 const gl = canvas.getContext("webgl2", { antialias: true, premultipliedAlpha: false, preserveDrawingBuffer: Q.has("capture") });
 if (!gl) { $("loading").textContent = "This page needs WebGL2, which this browser does not provide."; return; }
 
@@ -822,6 +828,7 @@ $("size").addEventListener("input", () => (dirty = true)); $("alpha").addEventLi
 addEventListener("resize", resize);
 
 // ---------- load
+const t00 = performance.now(), step = (m) => { if (Q.has("debug") && window.reportToServer) window.reportToServer(`${m} at ${Math.round(performance.now() - t00)} ms`); };
 async function load() {
   const [mres, bres, tres] = await Promise.all([fetch("globe.json"), fetch("pos.b64.txt"), fetch("tax.b64.txt")]);
   if (!mres.ok || !bres.ok || !tres.ok) throw new Error("data files missing");
@@ -853,7 +860,7 @@ async function load() {
     const c = g < PALETTE.length ? hex(PALETTE[g]) : g < ng ? hsl((g * 137.5) % 360, 0.32, 0.56) : [0.5, 0.55, 0.62];
     cols.set(c, 3 * g);
   }
-  upload(ab);
+  upload(ab); step("data uploaded");
   const ul = $("groups");
   meta.groups.forEach((name, g) => {
     const [dom, ph] = name.split(" · ");
@@ -877,10 +884,10 @@ async function load() {
   if (!(meta.layouts || []).includes("sculpt")) $("lSculpt").parentElement.parentElement.hidden = true;
   if (!meta.flags) $("cFlag").parentElement.parentElement.hidden = true;
   for (const c of meta.colors || []) if (!SCHEMES.points[c.name]) SCHEMES.points[c.name] = {};
-  await loadGenomes();
+  step("key built"); await loadGenomes(); step("genomes");
   for (const u of ["schemes.json", Q.get("schemes")]) if (u) { const r = await fetch(u).catch(() => null); if (r && r.ok) addSchemes(await r.json()); }
   fillSchemeMenus();
-  $("loading").hidden = true; dirty = true;
+  $("loading").hidden = true; dirty = true; step("loaded");
   if (lastSync) applySync(lastSync);
   if (show) await initShow();
 }
@@ -1493,6 +1500,6 @@ addEventListener("keydown", (e) => {
 if (Q.has("dome") || (show && show.mode === "dome")) setView("dome");
 if (Q.get("ui") === "0" || show) document.body.classList.add("clean");
 resize(); centreOn(-0.6, 0.15); requestAnimationFrame(frame);
-load().catch((e) => { loadError = e.message; $("loading").textContent = `The sequence data did not load (${e.message}). Reload the page to try again.`; });
+load().catch((e) => { loadError = e.message; if (window.reportToServer) window.reportToServer(`load failed: ${e.stack || e.message}`); $("loading").textContent = `The sequence data did not load (${e.message}). Reload the page to try again.`; });
 })();
 </script>
