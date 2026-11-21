@@ -8,6 +8,9 @@ dominates), and how abundant its dominant taxon is, for the tooltip.
                     taxon's summed relative abundance in each of them ("<rank>_data")
   OUT.dompct.tsv    id, percent: the relative abundance of the sample's dominant species as SAMPLES.tax.tsv names it
                     (or of its dominant genus when no species is named), as a percent of all its inserts
+  OUT.rankpct.tsv   id, then for each rank (domain .. species) the percent of the sample's inserts in the taxon
+                    SAMPLES.tax.tsv names at that rank (blank where it names none), for the tooltip of a drilled-down
+                    globe, whose points are coloured by their taxon one rank below the picked one
   OUT.info.tsv      (rewritten when present) gains a Dominant column: "34% Escherichia coli"
 
 Relative abundance is over all of a sample's inserts, the unassigned bin included, as motus profile reports it.
@@ -39,14 +42,19 @@ A = RA[np.array([row[r[0]] for r in mt])][:, np.array([col[s] for s in ids])].T.
 RANKS = ["phylum", "class", "order", "family", "genus", "species"]
 out = {"samples": np.array(ids), "min": np.array(a.min)}
 dom = {}
+for rk in ["domain"]:                                              # shares only: no search by domain
+    lab = np.array([r[mh.index(rk)] for r in mt])
+    names, code = np.unique(lab, return_inverse=True)
+    ok = lab != ""
+    M = sp.csr_matrix((np.ones(ok.sum()), (np.flatnonzero(ok), code[ok])), shape=(len(mt), len(names)))
+    dom[rk] = ((A @ M).tocsc(), {n: k for k, n in enumerate(names)})
 for rk in RANKS:
     lab = np.array([r[mh.index(rk)] for r in mt])
     names, code = np.unique(lab, return_inverse=True)
     ok = lab != ""
     M = sp.csr_matrix((np.ones(ok.sum()), (np.flatnonzero(ok), code[ok])), shape=(len(mt), len(names)))
     T = (A @ M).tocsc()                                            # sample x taxon
-    if rk in ("genus", "species"):
-        dom[rk] = (T, {n: k for k, n in enumerate(names)})
+    dom[rk] = (T.copy(), {n: k for k, n in enumerate(names)})
     T.data[T.data < a.min] = 0
     T.eliminate_zeros()
     keep = np.flatnonzero((np.diff(T.indptr) > 0) & (names != ""))
@@ -68,6 +76,17 @@ for k, r in enumerate(st):
 with open(a.out + ".dompct.tsv", "w") as f:
     f.write("id\tpercent\n")
     f.writelines(f"{s}\t{p:.1f}\n" for s, p in zip(ids, pct) if p == p)
+ALL = ["domain"] + RANKS
+cols = [sh.index(rk) for rk in ALL]
+rows_of = {rk: dom[rk][0].tocsr() for rk in ALL}
+with open(a.out + ".rankpct.tsv", "w") as f:
+    f.write("id\t" + "\t".join(ALL) + "\n")
+    for k, r in enumerate(st):
+        v = []
+        for rk, c in zip(ALL, cols):
+            ix, R = dom[rk][1], rows_of[rk]
+            v.append(f"{100 * R[k, ix[r[c]]]:.2f}" if r[c] and r[c] in ix else "")
+        f.write(r[0] + "\t" + "\t".join(v) + "\n")
 info = a.out + ".info.tsv"
 if os.path.exists(info):
     lines = [l.rstrip("\n").split("\t") for l in open(info)]

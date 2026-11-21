@@ -21,7 +21,7 @@ usage: pack_globe.py OUT.tax.tsv OUTDIR --layout similarity=map.tsv [--layout sc
                      [--layout-label "NAME=Button text|Status line"] [--about "subtitle"]
                      [--labels "KEY=Display name=labels.tsv"] [--labels-info KEY=info.tsv] [--labels-tip "KEY=Mostly in"]
                      [--default-labels KEY] [--geo-layout NAME] [--geo-labels spots.tsv]
-                     [--contains contains.npz] [--tip-percent dompct.tsv]
+                     [--contains contains.npz] [--tip-percent dompct.tsv] [--rank-percent rankpct.tsv]
   The first --layout is the one the viewer opens with. --layout-label names a layout's button and the line shown when
   it is chosen (the viewer has defaults for similarity and sculpt); --about replaces the viewer's subtitle, which
   otherwise describes an SSU globe.
@@ -41,7 +41,9 @@ usage: pack_globe.py OUT.tax.tsv OUTDIR --layout similarity=map.tsv [--layout sc
   contains names the ranks and taxa. When the input has abundances, abund_RANK.bin holds uint32 n, uint32 member
   offsets[n + 1], then one byte per member in the same order: 1 + round(80 * log10(relative abundance / min))
   (contains.abund in globe.json; min is contains.min), for the tooltip of a picked taxon. --tip-percent (id, percent) adds tippct.bin, one byte per point (255 = none):
-  the share of the point's named dominant taxon, for the tooltip.
+  the share of the point's named dominant taxon, for the tooltip. --rank-percent (id, then one percent column per
+  rank, blank = none; motus_sample_taxa.py) adds rankpct.bin, uint16 per rank per point (rank by rank, hundredths of
+  a percent, 65535 = none): the share of the point's own taxon at each rank (globe.json rankPercent names the ranks).
   --color NAME=values.tsv: a header naming a column of OUT.tax.tsv (id, organism, ...) and one value column, then a
   row per key (fsb_gc.py writes id/gc). All-numeric values make a continuous scheme, anything else a categorical
   one (at most 255 categories, the commonest first). The viewer's schemes say how each is coloured.
@@ -61,7 +63,7 @@ ap.add_argument("--labels", action="append", default=[])
 ap.add_argument("--labels-info", action="append", default=[]); ap.add_argument("--labels-tip", action="append", default=[])
 ap.add_argument("--default-labels", default="")
 ap.add_argument("--geo-layout", action="append", default=[]); ap.add_argument("--geo-labels")
-ap.add_argument("--contains"); ap.add_argument("--tip-percent")
+ap.add_argument("--contains"); ap.add_argument("--tip-percent"); ap.add_argument("--rank-percent")
 ap.add_argument("--models", help="models globe: KEY=label;... (layouts named <shape>[-KEY]; the first KEY is empty), e.g. \"=Evo 2 7B;kmer=5-mers\"")
 a = ap.parse_args()
 os.makedirs(a.outdir, exist_ok=True)
@@ -241,6 +243,17 @@ if a.tip_percent:
     tp = np.array([min(100, round(pc[r[0]])) if r[0] in pc else 255 for r in rows], np.uint8)
     with open(os.path.join(a.outdir, "tippct.b64.txt"), "w") as f:
         f.write(b64(tp[perm]))
+rank_percent = None
+if a.rank_percent:
+    with open(a.rank_percent) as rf:
+        rank_percent = rf.readline().rstrip("\n").split("\t")[1:]
+        rp = {l.split("\t", 1)[0]: l.rstrip("\n").split("\t")[1:] for l in rf}
+    M = np.full((len(rank_percent), len(rows)), 65535, np.uint16)
+    for j, r in enumerate(rows):
+        for q, v in enumerate(rp.get(r[0], [])):
+            if v: M[q, j] = min(10000, round(100 * float(v)))
+    with open(os.path.join(a.outdir, "rankpct.b64.txt"), "w") as f:
+        f.write(b64(M[:, perm].astype("<u2")))
 geo_labels = []
 if a.geo_labels:
     with open(a.geo_labels) as gf:
@@ -257,7 +270,7 @@ for spec in a.layout_label:
 extra = dict(models=[dict(key=k, label=v) for k, v in (m.split("=", 1) for m in a.models.split(";"))]) if a.models else {}
 with open(os.path.join(a.outdir, "globe.json"), "w") as gf:
     json.dump(dict(**extra, colors=colors, n=N, title=a.title, about=a.about, layouts=layouts, layoutInfo=layout_info, labelSets=label_sets, defaultLabels=a.default_labels, geoLayouts=a.geo_layout, geoLabels=geo_labels,
-                   contains=contains, tipPercent=bool(a.tip_percent), flags=bool(a.flags), traits=trait_names, groups=groups, groupCounts=gcount,
+                   contains=contains, tipPercent=bool(a.tip_percent), rankPercent=rank_percent, flags=bool(a.flags), traits=trait_names, groups=groups, groupCounts=gcount,
                    genera=genera, lineages=[x[1:] for x in lineages], lineageRank="".join(x[0] for x in lineages),
                    species=species, speciesBytes=species_bytes, ranks=dict(levels=["domain"] + RANKS + ["genus", "species"], names=rank_names)),
               gf, separators=(",", ":"))
