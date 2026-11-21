@@ -86,7 +86,7 @@ selection, colours, open fragment, show) to the others, and a SpaceNavigator plu
 and zooms the globe. On a Liquid Galaxy, from the master:
 
 ```
-LG_ORDER="lg5 lg6 lg7 lg8 lg1 lg2 lg3 lg4" viewer/lg_launch.sh work/globe     # screens left to right
+viewer/lg_launch.sh work/globe     # screens left to right
 viewer/lg_launch.sh stop
 ```
 
