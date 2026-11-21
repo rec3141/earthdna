@@ -51,6 +51,8 @@ FASTSNE=/path/to/fastsne pipeline/build.sh $SILVA work 144
 | `pipeline/pack_genome.py` | one genome's FASTA + GFF -> its genes and sequence, for opening its fragments in the viewer |
 | `pipeline/fsb_gc.py` | k-mer tables -> GC per row, for `pack_globe.py --color` |
 | `viewer/capture_show.js` | a show (`viewer/shows/*.json`) -> dome-master video or PNG frames |
+| `viewer/lg_server.py` | serves a globe to a multi-screen wall and keeps the screens in step; reads a 3D mouse |
+| `viewer/lg_launch.sh` | starts the server and a full-screen Firefox on each screen of a Liquid Galaxy |
 
 Taxonomic ranks come from SILVA's rank file rather than positions in the path, because eukaryote paths stop at
 whatever node SILVA reached. Species names come from the source-organism field and are kept only when their genus
@@ -74,6 +76,22 @@ node viewer/capture_show.js work/globe viewer/shows/dome_test.json frames --size
 ```
 
 Frames are drawn at show time rather than wall-clock time (about 0.6 s per 2048 x 2048 frame in software WebGL).
+
+## Multi-screen walls (Liquid Galaxy)
+
+`?wall=COLS&screen=I` draws column I (0 at the left) of a picture COLS screens wide, and `&bezel=PX` hides PX css
+pixels behind each bezel; labels are placed on the whole wall, so neighbouring screens agree. With `?sync` each screen
+follows `viewer/lg_server.py`: whichever screen was last touched leads and sends its view (camera, projection, layout,
+selection, colours, open fragment, show) to the others, and a SpaceNavigator plugged into the server's machine turns
+and zooms the globe. On a Liquid Galaxy, from the master:
+
+```
+LG_ORDER="lg5 lg6 lg7 lg8 lg1 lg2 lg3 lg4" viewer/lg_launch.sh work/globe     # screens left to right
+viewer/lg_launch.sh stop
+```
+
+For working on one machine, `python3 viewer/lg_server.py work/globe --viewer viewer/globe.html` and two windows at
+`/?sync&wall=2&screen=0&lead` and `/?sync&wall=2&screen=1`.
 
 ## Fragments, genes, sequence
 
