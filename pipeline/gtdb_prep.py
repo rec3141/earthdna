@@ -23,14 +23,18 @@ reference sequences) leave the workers.
 
 usage: gtdb_prep.py GTDB_RELEASE_DIR OUT [--ref 0.065] [--frag 10000] [--k 5] [--workers 16] [--shard 2000000]
                     [--shard-dir DIR] [--limit N]
-  GTDB_RELEASE_DIR holds skani/genome_paths.tsv, skani/database/... and taxonomy/gtdb_taxonomy.tsv
+       gtdb_prep.py --tar gtdb_genomes_reps_rNNN.tar.gz|- --taxonomy bac120_taxonomy.tsv.gz,ar53_taxonomy.tsv.gz OUT ...
+  GTDB_RELEASE_DIR holds skani/genome_paths.tsv, skani/database/... and taxonomy/gtdb_taxonomy.tsv (GTDB-Tk up to
+  r226). From r232 GTDB-Tk ships no genomes, so --tar reads GTDB's gtdb_genomes_reps tarball as a stream instead
+  (genomes in tarball order, no --limit), with the release's taxonomy files.
 """
-import argparse, gzip, os, struct, time, zlib
+import argparse, gzip, os, struct, sys, tarfile, threading, time, zlib
 from multiprocessing import Pool
 import numpy as np
 
 ap = argparse.ArgumentParser()
-ap.add_argument("gtdb"); ap.add_argument("out")
+ap.add_argument("gtdb", nargs="?"); ap.add_argument("out")
+ap.add_argument("--tar"); ap.add_argument("--taxonomy")
 ap.add_argument("--ref", type=float, default=0.065); ap.add_argument("--frag", type=int, default=10000)
 ap.add_argument("--k", type=int, default=5); ap.add_argument("--workers", type=int, default=os.cpu_count())
 ap.add_argument("--shard", type=int, default=2000000, help="fragments per all-fragment .fsb shard")
@@ -53,8 +57,10 @@ D = len(canon)
 REF_T = int(a.ref * 2 ** 32)
 
 def shred(job):
-    acc, path = job
-    with gzip.open(path, "rb") as f: data = f.read()
+    acc, src = job
+    if isinstance(src, bytes): data = gzip.decompress(src)
+    else:
+        with gzip.open(src, "rb") as f: data = f.read()
     ids, Xs, fa, ncontig, bp, long, nref = [], [], [], 0, 0, 0, 0
     for rec in data.split(b">")[1:]:
         head, _, body = rec.partition(b"\n")
@@ -111,12 +117,13 @@ class Shards:
 if __name__ == "__main__":
     t0 = time.time()
     tax = {}
-    for line in open(os.path.join(a.gtdb, "taxonomy", "gtdb_taxonomy.tsv")):
+    tfiles = a.taxonomy.split(",") if a.tar else [os.path.join(a.gtdb, "taxonomy", "gtdb_taxonomy.tsv")]
+    for line in (l for t in tfiles for l in (gzip.open(t, "rt") if t.endswith(".gz") else open(t))):
         g, lin = line.rstrip("\n").split("\t")
         r = dict(x.split("__", 1) for x in lin.split(";"))
         tax[g[3:] if g[:3] in ("RS_", "GB_") else g] = r
     jobs = []
-    for line in open(os.path.join(a.gtdb, "skani", "genome_paths.tsv")):
+    for line in ([] if a.tar else open(os.path.join(a.gtdb, "skani", "genome_paths.tsv"))):
         fn, d = line.split()[:2]
         acc = fn.replace("_genomic.fna.gz", "")
         if acc in tax: jobs.append((acc, os.path.join(a.gtdb, "skani", d, fn)))
@@ -124,7 +131,19 @@ if __name__ == "__main__":
     if a.limit:
         keep = np.random.default_rng(a.seed).choice(len(jobs), min(a.limit, len(jobs)), replace=False)
         jobs = [jobs[i] for i in sorted(keep)]
-    print(f"{len(jobs)} genomes with taxonomy ({len(tax)} in taxonomy), {F} bp fragments, {D} canonical {k}-mers, "
+    if a.tar:
+        # genomes straight from the tarball; at most 4 per worker in flight, so the stream is never read ahead
+        gate = threading.BoundedSemaphore(4 * a.workers)
+        def tar_jobs():
+            with tarfile.open(fileobj=sys.stdin.buffer if a.tar == "-" else None, name=None if a.tar == "-" else a.tar,
+                              mode="r|gz") as t:
+                for m in t:
+                    acc = os.path.basename(m.name).replace("_genomic.fna.gz", "")
+                    if not m.isfile() or not m.name.endswith("_genomic.fna.gz") or acc not in tax: continue
+                    gate.acquire()
+                    yield acc, t.extractfile(m).read()
+        jobs = tar_jobs()
+    print(f"{'streamed' if a.tar else len(jobs)} genomes with taxonomy ({len(tax)} in taxonomy), {F} bp fragments, {D} canonical {k}-mers, "
           f"reference fraction {a.ref}", flush=True)
 
     def taxrow(acc):
@@ -145,7 +164,8 @@ if __name__ == "__main__":
     fa = open(a.out + ".ref.fasta.gz", "wb")
     refids, rows, tot = [], [], np.zeros(5, np.int64)
     with Pool(a.workers) as pool:
-        for n, (acc, ids, X, isref, fz, st) in enumerate(pool.imap(shred, jobs, chunksize=2), 1):
+        for n, (acc, ids, X, isref, fz, st) in enumerate(pool.imap(shred, jobs, chunksize=1 if a.tar else 2), 1):
+            if a.tar: gate.release()
             r = taxrow(acc)
             if ids: allf.write(ids, X)
             if isref.any():
@@ -155,7 +175,7 @@ if __name__ == "__main__":
                     refids.append(ids[i]); rows.append(r)
             gen.write(acc + "\t" + "\t".join(map(str, st)) + "\t" + "\t".join(r) + "\n")
             tot += st
-            if n % 5000 == 0 or n == len(jobs):
+            if n % 5000 == 0:
                 print(f"[{time.time() - t0:7.0f}s] {n} genomes, {tot[1] / 1e9:.1f} Gbp, {tot[3]} fragments, "
                       f"{tot[4]} reference", flush=True)
     allf.close()
@@ -172,5 +192,5 @@ if __name__ == "__main__":
         codes.append(c)
     with open(a.out + ".ref.anchor", "w") as f:
         for row in zip(*codes): f.write(" ".join(map(str, row)) + "\n")
-    print(f"{tot[3]} fragments in {len(allf.paths)} shards, {len(refids)} reference, from {len(jobs)} genomes "
+    print(f"{tot[3]} fragments in {len(allf.paths)} shards, {len(refids)} reference, from {n} genomes "
           f"({time.time() - t0:.0f}s)")
