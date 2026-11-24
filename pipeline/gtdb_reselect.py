@@ -33,23 +33,26 @@ with open(a.shards) as sf:
 if not paths:
     raise SystemExit("no shard paths in " + a.shards)
 
+FSB = {b"FSB1": np.float32, b"FSB2": np.uint16}   # .fsb value types: float32, or uint16 counts
+
 def read_header(f, p):
     hdr = f.read(16)
-    if len(hdr) != 16 or hdr[:4] != b"FSB1":
-        raise SystemExit(f"{p}: invalid FSB1 header")
+    if len(hdr) != 16 or hdr[:4] not in FSB:
+        raise SystemExit(f"{p}: invalid FSB1/FSB2 header")
     d, n = struct.unpack("<iq", hdr[4:])
     if d < 0 or n < 0:
         raise SystemExit(f"{p}: negative dimensions ({n}, {d})")
-    return d, n
+    return d, n, hdr[:4]
 
 def ids_of(p):
     with open(p, "rb") as f:
-        d, n = read_header(f, p)
+        d, n, mg = read_header(f, p)
+        vb = np.dtype(FSB[mg]).itemsize
         f.seek(0, 2)
         end = f.tell()
-        if end < 16 + 4 * d * n:
-            raise SystemExit(f"{p}: truncated FSB1 matrix")
-        f.seek(16 + 4 * d * n)
+        if end < 16 + vb * d * n:
+            raise SystemExit(f"{p}: truncated matrix")
+        f.seek(16 + vb * d * n)
         tail = f.read().decode()
     ids = tail.splitlines() if n else ([] if tail == "" else tail.splitlines())
     if len(ids) != n:
@@ -80,21 +83,24 @@ for acc, cand in per_genome.items():
 
 # pass 2: write the chosen rows, their taxonomy and anchor groups
 with open(paths[0], "rb") as f0:
-    D, _ = read_header(f0, paths[0])
+    D, _, MG = read_header(f0, paths[0])   # the reference keeps the shards' layout (FSB1 or FSB2)
 refids, rows = [], []
 with open(a.out + ".ref.fsb", "wb") as out, open(a.out + ".ref.tax.tsv", "w") as taxf:
-    out.write(b"FSB1" + struct.pack("<iq", D, 0))
+    out.write(MG + struct.pack("<iq", D, 0))
     taxf.write("id\t" + "\t".join(cols) + "\n")
     for s, p in enumerate(paths):
         m = pick[s]
         ids = ids_of(p)
         with open(p, "rb") as f:
-            d, n = read_header(f, p)
+            d, n, mg = read_header(f, p)
             if d != D:
                 raise SystemExit(f"{p}: feature width {d} != {D}")
+            if mg != MG:
+                raise SystemExit(f"{p}: {mg!r} shard among {MG!r} shards")
+            vt = FSB[mg]
             for start in range(0, n, 200000):                     # stream rows in blocks
                 stop = min(n, start + 200000)
-                X = np.frombuffer(f.read(4 * d * (stop - start)), np.float32).reshape(-1, d)
+                X = np.frombuffer(f.read(np.dtype(vt).itemsize * d * (stop - start)), vt).reshape(-1, d)
                 out.write(X[m[start:stop]].tobytes())
         for i in np.flatnonzero(m):
             r = tax[acc_of(ids[i])]

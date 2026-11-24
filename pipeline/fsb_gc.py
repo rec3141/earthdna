@@ -30,13 +30,14 @@ with open(a.out, "w") as o:
     o.write("id\tgc\n")
     for p in paths:
         with open(p, "rb") as f:
-            assert f.read(4) == b"FSB1", p
+            vt = {b"FSB1": np.float32, b"FSB2": np.uint16}[f.read(4)]   # float32, or uint16 counts
+            vb = np.dtype(vt).itemsize
             D, N = struct.unpack("<iq", f.read(12))
             wt = gc_weights(D)
-            f.seek(16 + 4 * D * N); ids = f.read().decode().split("\n")
+            f.seek(16 + vb * D * N); ids = f.read().decode().split("\n")
             f.seek(16)
             for s in range(0, N, 200000):
-                X = np.frombuffer(f.read(4 * D * min(200000, N - s)), np.float32).reshape(-1, D)
+                X = np.frombuffer(f.read(vb * D * min(200000, N - s)), vt).reshape(-1, D).astype(np.float32)
                 g = X @ wt / np.maximum(X.sum(1), 1)
                 for i, v in zip(ids[s:s + len(g)], g):
                     if only is None or i in only: o.write(f"{i}\t{v:.4f}\n"); n += 1

@@ -22,13 +22,15 @@ ids = [r[0] for r in rows]
 def read(p):
     with open(p, "rb") as f:
         magic = f.read(4)
-        if magic != b"FSB1":
-            raise SystemExit(f"{p}: invalid FSB1 magic {magic!r}")
+        vt = {b"FSB1": np.float32, b"FSB2": np.uint16}.get(magic)   # float32, or uint16 counts
+        if vt is None:
+            raise SystemExit(f"{p}: invalid FSB1/FSB2 magic {magic!r}")
         d, n = struct.unpack("<iq", f.read(12))
-        buf = f.read(4 * d * n)
-        if len(buf) != 4 * d * n:
-            raise SystemExit(f"{p}: truncated FSB1 matrix ({len(buf)} < {4 * d * n})")
-        X = np.frombuffer(buf, np.float32).reshape(n, d)
+        nb = np.dtype(vt).itemsize * d * n
+        buf = f.read(nb)
+        if len(buf) != nb:
+            raise SystemExit(f"{p}: truncated matrix ({len(buf)} < {nb})")
+        X = np.frombuffer(buf, vt).reshape(n, d)
         tail = f.read().decode()
         got = tail.split("\n")[:n] if n > 0 else ([] if tail == "" else tail.split("\n"))
     assert got == ids, f"{p}: rows are not in {a.tax} order"

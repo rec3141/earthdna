@@ -11,7 +11,8 @@ ix = [{} for _ in range(4)]
 n = 0
 with open(out, "w") as o:
     for p in open(shards).read().split():
-        f = open(p, "rb"); f.read(4); d, rows = struct.unpack("<iq", f.read(12)); f.seek(16 + 4 * d * rows)
+        f = open(p, "rb"); vb = 2 if f.read(4) == b"FSB2" else 4; d, rows = struct.unpack("<iq", f.read(12))
+        f.seek(16 + vb * d * rows)
         for fid in f.read().decode().split("\n"):
             r = tax["_".join(fid.split("_")[:2])]
             c = []
