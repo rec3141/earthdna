@@ -9,7 +9,7 @@ kmers.py --rc restricted to the canonical columns. A fraction --ref of the fragm
 fragment id, so the choice does not depend on worker count or order) is also written as the reference set that
 fastsne embeds; everything is then projected onto that map.
 
-  OUT.all.NNN.fsb   all fragments, sharded (float32 counts, fastsne binary input), listed in OUT.all_fsb.txt
+  OUT.all.NNN.fsb   all fragments, sharded (uint16 counts, fastsne's FSB2 binary input), listed in OUT.all_fsb.txt
   OUT.ref.fsb       the reference fragments
   OUT.ref.tax.tsv   id, domain, group, phylum, class, order, family, genus, species, lineage_rank, lineage, organism
                     for the reference (silva_prep.py's layout: group = GTDB phylum, organism = genome accession)
@@ -48,6 +48,8 @@ if k < 1 or k > 15:
     raise SystemExit(f"--k must be in 1..15 (got {k})")
 if F < k:
     raise SystemExit(f"--frag ({F}) must be >= --k ({k})")
+if 2 * F > 65535:
+    raise SystemExit(f"--frag ({F}) is too long for uint16 counts (FSB2)")
 lut = np.full(256, 255, np.uint8)
 for i, c in enumerate(b"ACGT"): lut[c] = i; lut[c + 32] = i
 rc = np.array([sum((3 - ((w >> (2 * j)) & 3)) * 4 ** (k - 1 - j) for j in range(k)) for w in range(4 ** k)])
@@ -110,8 +112,8 @@ class Shards:
             self._close()
             p = f"{self.prefix}.{len(self.paths):03d}.fsb"
             self.paths.append(os.path.abspath(p))
-            self.f = open(p, "wb"); self.f.write(b"FSB1" + struct.pack("<iq", D, 0))
-        self.f.write(X.tobytes()); self.ids += ids
+            self.f = open(p, "wb"); self.f.write(b"FSB2" + struct.pack("<iq", D, 0))
+        self.f.write(X.astype(np.uint16).tobytes()); self.ids += ids
     def close(self): self._close()
 
 if __name__ == "__main__":
@@ -157,7 +159,7 @@ if __name__ == "__main__":
     cols = ["domain", "group", "phylum", "class", "order", "family", "genus", "species", "lineage_rank", "lineage", "organism"]
     sp = os.path.join(a.shard_dir, os.path.basename(a.out)) if a.shard_dir else a.out
     allf = Shards(sp + ".all", a.shard)
-    ref = open(a.out + ".ref.fsb", "wb"); ref.write(b"FSB1" + struct.pack("<iq", D, 0))
+    ref = open(a.out + ".ref.fsb", "wb"); ref.write(b"FSB2" + struct.pack("<iq", D, 0))
     taxf = open(a.out + ".ref.tax.tsv", "w"); taxf.write("id\t" + "\t".join(cols) + "\n")
     gen = open(a.out + ".genomes.tsv", "w")
     gen.write("accession\tcontigs\tbp\tcontigs_ge_frag\tfragments\tref_fragments\t" + "\t".join(cols) + "\n")
@@ -169,7 +171,7 @@ if __name__ == "__main__":
             r = taxrow(acc)
             if ids: allf.write(ids, X)
             if isref.any():
-                ref.write(X[isref].tobytes()); fa.write(fz)
+                ref.write(X[isref].astype(np.uint16).tobytes()); fa.write(fz)
                 for i in np.flatnonzero(isref):
                     taxf.write(ids[i] + "\t" + "\t".join(x.replace("\t", " ") for x in r) + "\n")
                     refids.append(ids[i]); rows.append(r)
