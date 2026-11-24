@@ -22,6 +22,9 @@
 # env: FASTSNE, PYTHON, MIN_PER_GENOME (5), REF_SHOWN (0.065), EXTRA (1500000), ITERS (1750), ANCHOR, READ_LEN (4000)
 #   REF_POINTS (6000000): the reference fraction is chosen after the fragments are counted so that the reference has
 #     about this many fragments (at most 30%, as for GTDB); REF overrides it with a fixed fraction
+#   FSB_U16: fastsne's tools/fsb_u16.py (default: next to FASTSNE). The k-mer tables are counts, so after the reference is
+#     chosen they are rewritten as FSB2 (uint16, half the size; fastsne reads FSB2 from commit 6dfdbc5 on, not in v0.3.1) and fastsne reads
+#     those; the FSB1 shards are removed once converted
 #   H (0.38): repulsion grid spacing. GTDB's 10.5M-fragment reference at h 0.28 took ~27 GB of GPU memory; these
 #     defaults keep the embedding inside a 20 GB card
 set -euo pipefail
@@ -30,7 +33,10 @@ here=$(cd "$(dirname "$0")" && pwd)
 fastsne=${FASTSNE:-fastsne}
 py=${PYTHON:-python3}
 mkdir -p "$work" "$big"
-p="$work/motusgen"; b="$big/motusgen"
+# p: gtdb_prep.py's outputs (its ref.* files are the REF_SHOWN subset); b: the embedded reference and its maps, under
+# a different prefix so neither overwrites the other
+p="$work/motusgen"; b="$big/motusgen.emb"
+fsb_u16=${FSB_U16:-$(dirname "$(command -v "$fastsne")")/tools/fsb_u16.py}
 ts() { echo "[$(date +%T)] $*"; }
 
 ts release
@@ -60,16 +66,25 @@ ts "reference: $ref of $total fragments"
 [ -s "$b.ref.fsb" ] || $py -I "$here/gtdb_reselect.py" "$p.all_fsb.txt" "$p.genomes.tsv" "$b" --ref "$ref" \
     --min-per-genome "${MIN_PER_GENOME:-5}"
 
+ts "FSB2 (uint16) copies"
+[ -s "$b.ref.u16.fsb" ] || $py -I "$fsb_u16" "$b.ref.fsb" "$b.ref.u16.fsb"
+if [ ! -s "$p.all_u16.txt" ]; then
+    sed 's/\.fsb$/.u16.fsb/' "$p.all_fsb.txt" > "$p.all_u16.txt.part"
+    paste "$p.all_fsb.txt" "$p.all_u16.txt.part" | xargs -P 6 -n 2 $py -I "$fsb_u16"
+    mv "$p.all_u16.txt.part" "$p.all_u16.txt"
+    xargs rm -f < "$p.all_fsb.txt"
+fi
+
 common=(--transform sqrt --pca 128 --sphere 35 --h "${H:-0.38}" --iters "${ITERS:-1750}")
 ts similarity
-[ -s "$p.sphere.tsv" ] || "$fastsne" -i "$b.ref.fsb" -o "$p.sphere.tsv" "${common[@]}" --save-model "$b.sphere.model" \
+[ -s "$p.sphere.tsv" ] || "$fastsne" -i "$b.ref.u16.fsb" -o "$p.sphere.tsv" "${common[@]}" --save-model "$b.sphere.model" \
     --write-knn "$p.knn"
 ts sculpt
-[ -s "$p.sculpt.tsv" ] || "$fastsne" -i "$b.ref.fsb" -o "$p.sculpt.tsv" "${common[@]}" --anchor-file "$b.ref.anchor" \
+[ -s "$p.sculpt.tsv" ] || "$fastsne" -i "$b.ref.u16.fsb" -o "$p.sculpt.tsv" "${common[@]}" --anchor-file "$b.ref.anchor" \
     --anchor "${ANCHOR:-0.0001,0.001,0.001,0.000125}" --save-model "$b.sculpt.model"
 ts project
-[ -s "$b.all.sphere.tsv" ] || "$fastsne" --project "$b.sphere.model" -i "@$p.all_fsb.txt" -o "$b.all.sphere.tsv"
-[ -s "$b.all.sculpt.tsv" ] || "$fastsne" --project "$b.sculpt.model" -i "@$p.all_fsb.txt" -o "$b.all.sculpt.tsv"
+[ -s "$b.all.sphere.tsv" ] || "$fastsne" --project "$b.sphere.model" -i "@$p.all_u16.txt" -o "$b.all.sphere.tsv"
+[ -s "$b.all.sculpt.tsv" ] || "$fastsne" --project "$b.sculpt.model" -i "@$p.all_u16.txt" -o "$b.all.sculpt.tsv"
 
 ts globe
 $py -I "$here/conflicts.py" "$b.ref.tax.tsv" "$p.knn" 48 "$p.conflicts.tsv"
