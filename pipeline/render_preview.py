@@ -29,7 +29,9 @@ meta = json.load(open(os.path.join(a.globe, "globe.json")))
 N = meta["n"]
 pos = load("pos")
 grp = pos[4 * N:5 * N]
-ll = pos[:4 * N].view("<u2") if a.layout == "similarity" else load(f"layout_{a.layout}").view("<u2")
+# the first layout listed in globe.json is the one stored in pos (older globes list none and call it similarity)
+first = (meta.get("layouts") or ["similarity"])[0]
+ll = pos[:4 * N].view("<u2") if a.layout in (first, "similarity") and not os.path.exists(os.path.join(a.globe, f"layout_{a.layout}.b64.txt")) and not os.path.exists(os.path.join(a.globe, f"layout_{a.layout}.bin")) else load(f"layout_{a.layout}").view("<u2")
 lon = ll[:N] / 65535 * 2 * np.pi - np.pi
 lat = ll[N:2 * N] / 65535 * np.pi - np.pi / 2
 

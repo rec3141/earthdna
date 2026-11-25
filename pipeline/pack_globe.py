@@ -18,6 +18,32 @@ Rows are shuffled once (fixed seed) so points draw in random order.
 
 usage: pack_globe.py OUT.tax.tsv OUTDIR --layout similarity=map.tsv [--layout sculpt=map2.tsv] [--flags conflicts.tsv]
                      [--traits traits.tsv] [--color gc=gc.tsv ...] [--title "SILVA 144 SSU Ref NR99"]
+                     [--layout-label "NAME=Button text|Status line"] [--about "subtitle"]
+                     [--labels "KEY=Display name=labels.tsv"] [--labels-info KEY=info.tsv] [--labels-tip "KEY=Mostly in"]
+                     [--default-labels KEY] [--geo-layout NAME] [--geo-labels spots.tsv]
+                     [--contains contains.npz] [--tip-percent dompct.tsv] [--rank-percent rankpct.tsv]
+  The first --layout is the one the viewer opens with. --layout-label names a layout's button and the line shown when
+  it is chosen (the viewer has defaults for similarity and sculpt); --about replaces the viewer's subtitle, which
+  otherwise describes an SSU globe.
+  --labels adds a label set the viewer can switch to in place of the taxonomy (e.g. environment): labels.tsv has a
+  header naming a column of OUT.tax.tsv and then one column per level, top level first, and a row per key; an empty
+  value means no label at that level. Written as labels_KEY.b64.txt, one uint16 array per level (65535 = none),
+  named in globe.json labelSets. --labels-info gives a label set a tooltip: info.tsv has a header naming a column of
+  OUT.tax.tsv and then the columns to show (the first is the title; lat and lon are shown as coordinates), written as
+  info_KEY.txt, one tab-separated line per point; --labels-tip words go before the label path in that tooltip.
+  --default-labels opens the globe on that label set instead of the taxonomy. --geo-layout marks a layout whose
+  lon/lat are places on Earth, which the viewer must show as they are (it otherwise turns each layout to suit it).
+  --geo-labels names places on those layouts in place of the label-set names: spots.tsv has lon, lat, samples, name
+  (globe.json geoLabels, biggest first).
+  --contains (motus_sample_taxa.py) lets a search find every point that contains a taxon, not only those it
+  labels: for each rank, contains_RANK.bin holds uint32 n, uint32 byte offsets[n + 1] (from the start of the
+  list area), then each taxon's points in this globe's order as LEB128 varint gaps (first gap from -1); globe.json
+  contains names the ranks and taxa. When the input has abundances, abund_RANK.bin holds uint32 n, uint32 member
+  offsets[n + 1], then one byte per member in the same order: 1 + round(80 * log10(relative abundance / min))
+  (contains.abund in globe.json; min is contains.min), for the tooltip of a picked taxon. --tip-percent (id, percent) adds tippct.bin, one byte per point (255 = none):
+  the share of the point's named dominant taxon, for the tooltip. --rank-percent (id, then one percent column per
+  rank, blank = none; motus_sample_taxa.py) adds rankpct.bin, uint16 per rank per point (rank by rank, hundredths of
+  a percent, 65535 = none): the share of the point's own taxon at each rank (globe.json rankPercent names the ranks).
   --color NAME=values.tsv: a header naming a column of OUT.tax.tsv (id, organism, ...) and one value column, then a
   row per key (fsb_gc.py writes id/gc). All-numeric values make a continuous scheme, anything else a categorical
   one (at most 255 categories, the commonest first). The viewer's schemes say how each is coloured.
@@ -32,6 +58,12 @@ ap.add_argument("tax"); ap.add_argument("outdir")
 ap.add_argument("--layout", action="append", required=True)
 ap.add_argument("--flags"); ap.add_argument("--title", default="")
 ap.add_argument("--traits"); ap.add_argument("--color", action="append", default=[])
+ap.add_argument("--layout-label", action="append", default=[]); ap.add_argument("--about", default="")
+ap.add_argument("--labels", action="append", default=[])
+ap.add_argument("--labels-info", action="append", default=[]); ap.add_argument("--labels-tip", action="append", default=[])
+ap.add_argument("--default-labels", default="")
+ap.add_argument("--geo-layout", action="append", default=[]); ap.add_argument("--geo-labels")
+ap.add_argument("--contains"); ap.add_argument("--tip-percent"); ap.add_argument("--rank-percent")
 ap.add_argument("--models", help="models globe: KEY=label;... (layouts named <shape>[-KEY]; the first KEY is empty), e.g. \"=Evo 2 7B;kmer=5-mers\"")
 a = ap.parse_args()
 os.makedirs(a.outdir, exist_ok=True)
@@ -135,9 +167,110 @@ for spec in a.color:
     with open(os.path.join(a.outdir, f"color_{name}.b64.txt"), "w") as f:
         f.write(b64(code[perm]))
     print(f"color {name}: {colors[-1]['kind']}, {int((code != 255).sum())} of {N} points have a value")
+label_sets = []
+for spec in a.labels:
+    key, name, path = spec.split("=", 2)
+    with open(path) as lf:
+        ll = [l.rstrip("\n").split("\t") for l in lf]
+    kc, levels = header.index(ll[0][0]), ll[0][1:]
+    by = {r[0]: r[1:] for r in ll[1:]}
+    names, arrs = {}, []
+    for k, lv in enumerate(levels):
+        vals = [(by.get(r[kc]) or [""] * len(levels))[k] for r in rows]
+        names[lv], _, c = codes(vals)
+        arrs.append(c[perm].astype("<u2"))
+    with open(os.path.join(a.outdir, f"labels_{key}.b64.txt"), "w") as f:
+        f.write(b64(*arrs))
+    label_sets.append(dict(key=key, name=name, levels=levels, names=names))
+    print(f"labels {key}: " + ", ".join(f"{lv} {len(names[lv])}" for lv in levels) + f"; {sum(1 for r in rows if r[kc] in by)} of {N} points keyed")
+for spec in a.labels_info:
+    key, path = spec.split("=", 1)
+    ls = next(x for x in label_sets if x["key"] == key)
+    with open(path) as lf:
+        il = [l.rstrip("\n").split("\t") for l in lf]
+    kc, cols = header.index(il[0][0]), il[0][1:]
+    by = {r[0]: r[1:] for r in il[1:]}
+    empty = [""] * len(cols)
+    with open(os.path.join(a.outdir, f"info_{key}.txt"), "w") as f:
+        f.write("\n".join("\t".join(by.get(rows[i][kc], empty)) for i in perm) + "\n")
+    ls["info"] = cols
+for spec in a.labels_tip:
+    key, text = spec.split("=", 1)
+    next(x for x in label_sets if x["key"] == key)["tip"] = text
+assert not a.default_labels or any(x["key"] == a.default_labels for x in label_sets), "--default-labels: no such --labels"
+def varints(v):
+    """LEB128 bytes of non-negative ints"""
+    v = np.asarray(v, np.uint64); out = []
+    while True:
+        b = (v & 0x7F).astype(np.uint8); v = v >> np.uint64(7); more = v > 0
+        out.append(np.where(more, b | 0x80, b).astype(np.uint8))
+        if not more.any(): break
+    nb = 1 + sum((np.asarray(x) >= 0x80).astype(int) for x in out[:-1]) if len(out) > 1 else np.ones(len(v), int)
+    # interleave: value k's bytes are out[0][k], out[1][k], ... for its first nb[k] bytes
+    M = np.stack(out, 1); keep = np.arange(M.shape[1])[None, :] < nb[:, None]
+    return M[keep].tobytes()
+contains = None
+if a.contains:
+    Z = np.load(a.contains, allow_pickle=False)
+    row_of = {r[0]: k for k, r in enumerate(rows)}
+    inv = np.empty(N, np.int64); inv[perm] = np.arange(N)       # packed position of each tax.tsv row
+    pos_of = np.array([inv[row_of[s]] if s in row_of else -1 for s in Z["samples"]])
+    contains = dict(min=float(Z["min"]), ranks=[], names={})
+    for rk in ["phylum", "class", "order", "family", "genus", "species"]:
+        names, ptr, ind = Z[f"{rk}_names"], Z[f"{rk}_indptr"], Z[f"{rk}_indices"]
+        val = Z[f"{rk}_data"] if f"{rk}_data" in Z else None
+        chunks, offs, kept, ab, aoffs = [], [0], [], [], [0]
+        for t in range(len(names)):
+            q = pos_of[ind[ptr[t]:ptr[t + 1]]]; ok = q >= 0; o = np.argsort(q[ok]); q = q[ok][o]
+            if not len(q): continue
+            b = varints(np.diff(np.concatenate([[-1], q])))
+            chunks.append(b); offs.append(offs[-1] + len(b)); kept.append(str(names[t]))
+            if val is not None:
+                v = val[ptr[t]:ptr[t + 1]][ok][o]
+                ab.append(np.clip(1 + np.round(80 * np.log10(np.maximum(v, float(Z["min"])) / float(Z["min"]))), 1, 255).astype(np.uint8))
+                aoffs.append(aoffs[-1] + len(q))
+        if val is not None:
+            with open(os.path.join(a.outdir, f"abund_{rk}.bin"), "wb") as f:
+                f.write(np.array([len(kept)], "<u4").tobytes()); f.write(np.array(aoffs, "<u4").tobytes()); f.write(np.concatenate(ab).tobytes())
+            contains["abund"] = True
+        with open(os.path.join(a.outdir, f"contains_{rk}.bin"), "wb") as f:
+            f.write(np.array([len(kept)], "<u4").tobytes()); f.write(np.array(offs, "<u4").tobytes()); f.write(b"".join(chunks))
+        contains["ranks"].append(rk); contains["names"][rk] = kept
+        print(f"contains {rk}: {len(kept)} taxa, {offs[-1] / 1e6:.1f} MB")
+if a.tip_percent:
+    with open(a.tip_percent) as tf:
+        next(tf); pc = {l.split("\t")[0]: float(l.split("\t")[1]) for l in tf}
+    tp = np.array([min(100, round(pc[r[0]])) if r[0] in pc else 255 for r in rows], np.uint8)
+    with open(os.path.join(a.outdir, "tippct.b64.txt"), "w") as f:
+        f.write(b64(tp[perm]))
+rank_percent = None
+if a.rank_percent:
+    with open(a.rank_percent) as rf:
+        rank_percent = rf.readline().rstrip("\n").split("\t")[1:]
+        rp = {l.split("\t", 1)[0]: l.rstrip("\n").split("\t")[1:] for l in rf}
+    M = np.full((len(rank_percent), len(rows)), 65535, np.uint16)
+    for j, r in enumerate(rows):
+        for q, v in enumerate(rp.get(r[0], [])):
+            if v: M[q, j] = min(10000, round(100 * float(v)))
+    with open(os.path.join(a.outdir, "rankpct.b64.txt"), "w") as f:
+        f.write(b64(M[:, perm].astype("<u2")))
+geo_labels = []
+if a.geo_labels:
+    with open(a.geo_labels) as gf:
+        next(gf)
+        for l in gf:
+            lo, la, n, name = l.rstrip("\n").split("\t")
+            geo_labels.append(dict(lon=float(lo), lat=float(la), n=int(n), text=name))
+layout_info = {}
+for spec in a.layout_label:
+    name, text = spec.split("=", 1)
+    assert name in layouts, f"--layout-label {name}: no such --layout"
+    label, _, about = text.partition("|")
+    layout_info[name] = dict(label=label, about=about)
 extra = dict(models=[dict(key=k, label=v) for k, v in (m.split("=", 1) for m in a.models.split(";"))]) if a.models else {}
 with open(os.path.join(a.outdir, "globe.json"), "w") as gf:
-    json.dump(dict(**extra, colors=colors, n=N, title=a.title, layouts=layouts, flags=bool(a.flags), traits=trait_names, groups=groups, groupCounts=gcount,
+    json.dump(dict(**extra, colors=colors, n=N, title=a.title, about=a.about, layouts=layouts, layoutInfo=layout_info, labelSets=label_sets, defaultLabels=a.default_labels, geoLayouts=a.geo_layout, geoLabels=geo_labels,
+                   contains=contains, tipPercent=bool(a.tip_percent), rankPercent=rank_percent, flags=bool(a.flags), traits=trait_names, groups=groups, groupCounts=gcount,
                    genera=genera, lineages=[x[1:] for x in lineages], lineageRank="".join(x[0] for x in lineages),
                    species=species, speciesBytes=species_bytes, ranks=dict(levels=["domain"] + RANKS + ["genus", "species"], names=rank_names)),
               gf, separators=(",", ":"))

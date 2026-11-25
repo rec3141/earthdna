@@ -109,7 +109,7 @@ body.clean { background: #000; cursor: none; }
 <section id="head" class="card">
   <div>
     <h1>EarthDNA</h1>
-    <p class="sub"><b id="nseq">905,628</b> SSU rRNA sequences from <span id="src">SILVA 144 NR99</span>, placed by 5-mer composition with spherical t-SNE (fastsne). Nearby sequences are similar.</p>
+    <p class="sub" id="about"><b id="nseq">905,628</b> SSU rRNA sequences from <span id="src">SILVA 144 NR99</span>, placed by 5-mer composition with spherical t-SNE (fastsne). Nearby sequences are similar.</p>
   </div>
   <div class="row">
     <div class="seg" role="group" aria-label="Projection">
@@ -120,10 +120,7 @@ body.clean { background: #000; cursor: none; }
     <button class="btn" id="spin" aria-pressed="true">Pause spin</button>
   </div>
   <div class="row">
-    <div class="seg" role="group" aria-label="Layout">
-      <button id="lSim" aria-pressed="true">Similarity</button>
-      <button id="lSculpt" aria-pressed="false">Sculpted by taxonomy</button>
-    </div>
+    <div class="seg" role="group" aria-label="Layout" id="layoutSeg"></div>
   </div>
   <div class="row">
     <div class="seg" role="group" aria-label="Colour">
@@ -536,18 +533,43 @@ async function setColour(mode) {
   } else $("status").textContent = "Drag to turn the globe. Click a point to pick out its genus.";
   dirty = true;
 }
+// layout buttons: globe.json layoutInfo { name: { label, about } }, else these defaults, else the name itself.
+// The first layout in globe.json comes with pos.b64.txt and is held here under "similarity" whatever it is called.
+const LAYOUT_TEXT = {
+  similarity: { label: "Similarity", about: "Placed by sequence similarity alone." },
+  sculpt: { label: "Sculpted by taxonomy", about: "Sculpted: each sequence is gently pulled toward its domain, phylum, class and order." },
+};
+const layoutKey = (name) => (meta.layouts || [])[0] === name ? "similarity" : name;
+function layoutText(name) {
+  const t = Object.assign({ label: name, about: "" }, LAYOUT_TEXT[name], (meta.layoutInfo || {})[name]);
+  if (!t.label) t.label = name;
+  return t;
+}
+function layoutButtons() {
+  const names = meta.layouts && meta.layouts.length ? meta.layouts : ["similarity"], seg = $("layoutSeg");
+  seg.textContent = "";
+  for (const n of names) {
+    const b = document.createElement("button");
+    b.dataset.layout = layoutKey(n); b.dataset.name = n; b.textContent = layoutText(n).label;
+    b.setAttribute("aria-pressed", layoutKey(n) === current ? "true" : "false");
+    b.addEventListener("click", () => showLayout(layoutKey(n)));
+    seg.appendChild(b);
+  }
+  seg.parentElement.hidden = names.length < 2;
+}
 async function showLayout(name) {
   if (name === current || morph) return;
+  const shown = name === "similarity" ? (meta.layouts || ["similarity"])[0] : name, about = layoutText(shown).about;
   if (!layouts[name]) {
-    $("status").textContent = "Loading the sculpted layout…";
-    if (!await ensureLayout(name)) { $("status").textContent = "The sculpted layout did not load. Try again."; return; }
-    $("status").textContent = name === "sculpt" ? "Sculpted: each sequence is gently pulled toward its domain, phylum, class and order." : "Placed by sequence similarity alone.";
-  } else $("status").textContent = name === "sculpt" ? "Sculpted: each sequence is gently pulled toward its domain, phylum, class and order." : "Placed by sequence similarity alone.";
+    $("status").textContent = `Loading the ${layoutText(shown).label.toLowerCase()} layout…`;
+    if (!await ensureLayout(name)) { $("status").textContent = `The ${layoutText(shown).label.toLowerCase()} layout did not load. Try again.`; return; }
+  }
+  $("status").textContent = about;
   bindLayouts(layouts[current], layouts[name]);
   const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
   morph = { from: current, to: layouts[name], t0: performance.now(), dur: reduce ? 1 : 2200, t: 0 };
   current = name;
-  for (const [id, n] of [["lSim", "similarity"], ["lSculpt", "sculpt"]]) $(id).setAttribute("aria-pressed", n === name ? "true" : "false");
+  for (const b of $("layoutSeg").children) b.setAttribute("aria-pressed", b.dataset.layout === name ? "true" : "false");
 }
 function draw() {
   const sc = scale();
@@ -820,8 +842,6 @@ $("vGlobe").addEventListener("click", () => setView("globe"));
 $("vFlat").addEventListener("click", () => setView("flat"));
 $("vDome").addEventListener("click", () => setView("dome"));
 $("spin").addEventListener("click", () => { spin = !spin; $("spin").setAttribute("aria-pressed", spin ? "true" : "false"); $("spin").textContent = spin ? "Pause spin" : "Spin"; });
-$("lSim").addEventListener("click", () => showLayout("similarity"));
-$("lSculpt").addEventListener("click", () => showLayout("sculpt"));
 $("cTax").addEventListener("click", () => setColour(false));
 $("cFlag").addEventListener("click", () => setColour(true));
 $("size").addEventListener("input", () => (dirty = true)); $("alpha").addEventListener("input", () => (dirty = true));
@@ -881,7 +901,8 @@ async function load() {
   $("ngroups").textContent = ng;
   $("nseq").textContent = N.toLocaleString();
   if (meta.title) $("src").textContent = meta.title;
-  if (!(meta.layouts || []).includes("sculpt")) $("lSculpt").parentElement.parentElement.hidden = true;
+  if (meta.about) $("about").textContent = meta.about;
+  layoutButtons();
   if (!meta.flags) $("cFlag").parentElement.parentElement.hidden = true;
   for (const c of meta.colors || []) if (!SCHEMES.points[c.name]) SCHEMES.points[c.name] = {};
   step("key built"); await loadGenomes(); step("genomes");
