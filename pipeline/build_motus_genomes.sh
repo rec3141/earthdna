@@ -7,6 +7,8 @@
 #   -> every fragment projected onto both maps
 #   -> viewer data: the REF_SHOWN hash subset of the reference + EXTRA projected fragments, with the mOTU traits
 #   -> 4 kb read models (reference fragments cut to read length, fixed at their parents' positions) for reads
+#   The published globes instead embed every fragment together on Grex: gtdb_all_tax.py --full / gtdb_all_anchor.py on
+#   WORK_DIR's all-fragment shards, embed_all_grex.sbatch, then genome_globe_levels.sh (11%, 30% and 100% globes).
 #
 # The genomes are presented to gtdb_prep.py as a GTDB release: WORK_DIR/release/skani/reps/<mOTU>_genomic.fna.gz
 # links to REPS_DIR/<genome>.fa.gz, and release/taxonomy/gtdb_taxonomy.tsv holds each mOTU's GTDB R226 lineage from

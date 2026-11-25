@@ -40,6 +40,11 @@ FASTSNE=/path/to/fastsne pipeline/build.sh $SILVA work 144
 | `pipeline/gtdb_prep.py` | GTDB genomes -> every 10 kb fragment's canonical 5-mers (sharded), reference sequences |
 | `pipeline/gtdb_reselect.py` | a bigger reference from the shards: id-hash fraction + a floor per genome |
 | `pipeline/gtdb_globe_set.py` | reference subset + projected fragments -> one point set for `pack_globe.py` |
+| `pipeline/gtdb_all_tax.py`, `gtdb_all_anchor.py` | all-fragment shards -> taxonomy and anchor groups for every row, for embedding them all |
+| `pipeline/embed_all_grex.sbatch` | every fragment of a genome globe embedded at once (fastsne_cpu, one Grex genoa node) |
+| `pipeline/genome_globe_levels.sh` | a whole-set embedding -> globes at 11%, 30% and 100% of the fragments |
+| `pipeline/pack_gtdb_all.py` | every fragment on one globe, taxonomy once per genome (`records.bin`) |
+| `pipeline/build_motus_genomes.sh` | the mOTUs-db 4.1 genome-fragment globe (one representative per mOTU), as `build_gtdb.sh` |
 | `pipeline/build_motus.sh` | the mOTUs-db 4.1 globes: mOTUs by marker-gene 5-mers or co-occurrence, metagenomes by mOTU composition |
 | `pipeline/motus_prep.py` | mOTUs marker database -> fasta (one record per mOTU), GTDB taxonomy table, anchor groups |
 | `pipeline/motus_profile_traits.py` | mOTUs profiles -> per-mOTU prevalence and traits (widespread, rare, isolate, MAG-only) |
@@ -159,6 +164,18 @@ Nanopore reads are placed with 4 kb read models (reference fragments cut to read
 the genome counterpart of the amplicon region models). On three archived barcodes (3.6M reads), the 15 reference
 fragments nearest a read share its sendsketch label (ANI >= 95) at phylum 0.89-0.93 and genus 0.10-0.58, depending on
 how well the sample's taxa are represented in GTDB.
+
+Every fragment can also be embedded together, with no reference and no projection: `gtdb_all_tax.py --full` and
+`gtdb_all_anchor.py` describe every row of the all-fragment shards, `embed_all_grex.sbatch` embeds them on one Grex
+genoa node (fastsne_cpu, h 0.28), and `genome_globe_levels.sh` packs the result at three densities: 11% and 30% id-hash
+subsets and all of them (`pack_gtdb_all.py`).
+
+## Genome globe (mOTUs-db 4.1)
+
+`pipeline/build_motus_genomes.sh` runs `build_gtdb.sh`'s steps on the representative genome of every mOTUs-db 4.1
+mOTU (124,295 genomes, 24.07M fragments), with the mOTU id as the accession and the mOTU traits. The published globes
+embed all 24.07M fragments together (`embed_all_grex.sbatch`, ~10 min and ~65 GB per layout) and show 11% (2.65M),
+30% (7.22M) and 100% of them (`genome_globe_levels.sh`).
 
 ## Evo 2 (experimental)
 
