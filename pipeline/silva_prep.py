@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SILVA SSU fasta -> inputs for the globe.
 
-  OUT.fsb       k-mer counts (float32, fastsne binary input; rows in fasta order)
+  OUT.fsb       k-mer counts (uint16, fastsne's FSB2 binary input; rows in fasta order)
   OUT.tax.tsv   id, domain, group, phylum, class, order, family, genus, species, lineage_rank, lineage, organism
   OUT.anchor    group ids for fastsne --anchor-file: domain, group, class, order (-1 = rank missing)
 
@@ -73,9 +73,11 @@ def counts(s):
 
 ids, rows = [], []
 fsb = open(a.out + ".fsb", "wb")
-fsb.write(b"FSB1" + struct.pack("<iq", 4 ** k, 0))  # N patched at the end
+fsb.write(b"FSB2" + struct.pack("<iq", 4 ** k, 0))  # N patched at the end
 def flush(seq):
-    fsb.write(counts(b"".join(seq)).tobytes())
+    c = counts(b"".join(seq))
+    if c.max(initial=0) > 65535: raise SystemExit(f"{ids[-1]}: a k-mer count above 65535 does not fit FSB2")
+    fsb.write(c.astype(np.uint16).tobytes())
 seq = None
 with gzip.open(a.fasta, "rb") as f:
     for line in f:

@@ -22,15 +22,17 @@ ranks = {"domain": 1, "phylum": 3, "class": 4, "order": 5, "family": 6, "genus":
 def read_fsb(path):
     with open(path, "rb") as f:
         hdr = f.read(16)
-        if len(hdr) != 16 or hdr[:4] != b"FSB1":
-            raise SystemExit(f"{path}: invalid FSB1 header")
+        vt = {b"FSB1": np.float32, b"FSB2": np.uint16}.get(hdr[:4])   # float32, or uint16 counts
+        if len(hdr) != 16 or vt is None:
+            raise SystemExit(f"{path}: invalid FSB1/FSB2 header")
         d, n = struct.unpack("<iq", hdr[4:])
         if d < 0 or n < 0:
             raise SystemExit(f"{path}: negative dimensions ({n}, {d})")
-        mbytes = f.read(4 * d * n)
-        if len(mbytes) != 4 * d * n:
-            raise SystemExit(f"{path}: truncated FSB1 matrix ({len(mbytes)} of {4 * d * n} bytes)")
-        X = np.frombuffer(mbytes, np.float32).reshape(n, d)
+        nb = np.dtype(vt).itemsize * d * n
+        mbytes = f.read(nb)
+        if len(mbytes) != nb:
+            raise SystemExit(f"{path}: truncated matrix ({len(mbytes)} of {nb} bytes)")
+        X = np.frombuffer(mbytes, vt).reshape(n, d).astype(np.float32, copy=False)
         tail = f.read().decode()
         ids = tail.splitlines() if n else ([] if tail == "" else tail.splitlines())
         if len(ids) != n:
